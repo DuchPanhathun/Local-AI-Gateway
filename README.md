@@ -1,8 +1,8 @@
 # ai-thun
 
 A Next.js API endpoint that proxies chat requests to [SEA-LION](https://sea-lion.ai) (AI Singapore's
-free, OpenAI-compatible LLM API) or [Cerebras](https://cloud.cerebras.ai), round-robining across
-multiple API keys per provider so it doesn't hit either one's per-key rate limit.
+free, OpenAI-compatible LLM API), [Cerebras](https://cloud.cerebras.ai), or [Groq](https://console.groq.com),
+round-robining across multiple API keys per provider so it doesn't hit any one key's rate limit.
 
 ## Setup
 
@@ -19,6 +19,8 @@ Fill in `.env`:
   whichever are set.
 - `CEREBRAS_API_KEY1`, `CEREBRAS_API_KEY2`, ... — get keys from
   [cloud.cerebras.ai](https://cloud.cerebras.ai). Same `1..21` convention as SEA-LION.
+- `GROQ_API_KEY1`, `GROQ_API_KEY2`, ... — get keys from
+  [console.groq.com/keys](https://console.groq.com/keys). Same `1..21` convention.
 - `APP_API_KEY` — a secret you make up. Callers must send it back as
   `Authorization: Bearer <APP_API_KEY>`. This is what stops random people from burning through your
   free quota once the URL is public. Leave it blank to disable auth entirely.
@@ -65,9 +67,9 @@ curl -X POST http://localhost:3000/api/chat \
   -d '{"provider": "cerebras", "model": "gpt-oss-120b", "prompt": "Hello!"}'
 ```
 
-- `provider`: `"sea-lion"` (default) or `"cerebras"`.
+- `provider`: `"sea-lion"` (default), `"cerebras"`, or `"groq"`.
 - `model`: any model id the chosen provider supports. If omitted, falls back to
-  `SEA_LION_MODEL`/`CEREBRAS_MODEL` from `.env`, or each provider's built-in default.
+  `SEA_LION_MODEL`/`CEREBRAS_MODEL`/`GROQ_MODEL` from `.env`, or each provider's built-in default.
 
 Known Cerebras models as of writing: `qwen-3.8-27b` (default, most generous quota),
 `gemma-4-31b` (preview, 5 req/min), `gpt-oss-120b` (production, 5 req/min) — check

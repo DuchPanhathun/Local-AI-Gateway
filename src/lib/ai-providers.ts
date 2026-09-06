@@ -1,4 +1,4 @@
-export type ProviderId = "sea-lion" | "cerebras";
+export type ProviderId = "sea-lion" | "cerebras" | "groq";
 
 type ProviderConfig = {
   baseUrl: string;
@@ -21,6 +21,11 @@ const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     baseUrl: "https://api.cerebras.ai/v1",
     keyEnvPrefix: "CEREBRAS_API_KEY",
     defaultModel: process.env.CEREBRAS_MODEL || "qwen-3.8-27b",
+  },
+  groq: {
+    baseUrl: "https://api.groq.com/openai/v1",
+    keyEnvPrefix: "GROQ_API_KEY",
+    defaultModel: process.env.GROQ_MODEL || "openai/gpt-oss-120b",
   },
 };
 
