@@ -4,12 +4,15 @@ type ProviderConfig = {
   baseUrl: string;
   keyEnvPrefix: string;
   defaultModel: string;
+  // When set, a key stops being used once its tracked usage for the current
+  // UTC day reaches this many tokens, and rotation moves on to the next key.
+  dailyTokenLimitPerKey?: number;
 };
 
-// Both providers speak the OpenAI chat-completions format, so one call path
-// covers both. Free/preview tiers on both cap requests per minute per key,
-// so we round-robin every call across all `<PREFIX>1..21` keys found for the
-// chosen provider, and fall through to the next key on a 429 before giving up.
+// All three providers speak the OpenAI chat-completions format, so one call
+// path covers them. Free/preview tiers cap requests per minute per key, so we
+// round-robin every call across all `<PREFIX>1..21` keys found for the chosen
+// provider, and fall through to the next key on a 429 before giving up.
 const PROVIDERS: Record<ProviderId, ProviderConfig> = {
   "sea-lion": {
     baseUrl: "https://api.sea-lion.ai/v1",
@@ -26,6 +29,7 @@ const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     baseUrl: "https://api.groq.com/openai/v1",
     keyEnvPrefix: "GROQ_API_KEY",
     defaultModel: process.env.GROQ_MODEL || "openai/gpt-oss-120b",
+    dailyTokenLimitPerKey: Number(process.env.GROQ_DAILY_TOKEN_LIMIT) || 500_000,
   },
 };
 
@@ -41,6 +45,34 @@ const MAX_KEYS_PER_PROVIDER = 21;
 // SEA-LION's rotation and vice versa. Best-effort — lives per warm instance.
 const cursors = new Map<ProviderId, number>();
 
+// Per-key daily token usage (Groq only). Keyed by "<providerId>:<key>", reset
+// whenever the tracked UTC day no longer matches today. Same caveat as the
+// rotation cursor: in-memory per warm instance, not synced across concurrent
+// serverless instances or cold starts — a best-effort spread, not an exact
+// quota ledger.
+type UsageEntry = { day: string; tokens: number };
+const dailyUsage = new Map<string, UsageEntry>();
+
+function todayUTC(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function getUsedTokens(providerId: ProviderId, key: string): number {
+  const entry = dailyUsage.get(`${providerId}:${key}`);
+  return entry && entry.day === todayUTC() ? entry.tokens : 0;
+}
+
+function addUsedTokens(providerId: ProviderId, key: string, tokens: number): void {
+  const mapKey = `${providerId}:${key}`;
+  const day = todayUTC();
+  const entry = dailyUsage.get(mapKey);
+  if (entry && entry.day === day) {
+    entry.tokens += tokens;
+  } else {
+    dailyUsage.set(mapKey, { day, tokens });
+  }
+}
+
 function collectKeys(prefix: string): string[] {
   const keys: string[] = [];
   for (let i = 1; i <= MAX_KEYS_PER_PROVIDER; i++) {
@@ -50,10 +82,12 @@ function collectKeys(prefix: string): string[] {
   return keys;
 }
 
+export type ProviderCallResult = { status: number; data: unknown };
+
 export async function callProvider(
   providerId: ProviderId,
   body: Record<string, unknown>
-): Promise<Response> {
+): Promise<ProviderCallResult> {
   const config = PROVIDERS[providerId];
   const keys = collectKeys(config.keyEnvPrefix);
   if (keys.length === 0) {
@@ -68,6 +102,16 @@ export async function callProvider(
   for (let attempt = 0; attempt < keys.length; attempt++) {
     const key = keys[cursor % keys.length];
     cursor++;
+
+    if (
+      config.dailyTokenLimitPerKey &&
+      getUsedTokens(providerId, key) >= config.dailyTokenLimitPerKey
+    ) {
+      lastError = new Error(
+        `${providerId} key hit its daily token limit (${config.dailyTokenLimitPerKey})`
+      );
+      continue;
+    }
 
     let res: Response;
     try {
@@ -89,12 +133,22 @@ export async function callProvider(
       continue;
     }
 
+    const data: unknown = await res.json();
+
+    if (config.dailyTokenLimitPerKey) {
+      const totalTokens = (data as { usage?: { total_tokens?: number } })?.usage
+        ?.total_tokens;
+      if (typeof totalTokens === "number") {
+        addUsedTokens(providerId, key, totalTokens);
+      }
+    }
+
     cursors.set(providerId, cursor);
-    return res;
+    return { status: res.status, data };
   }
 
   cursors.set(providerId, cursor);
   throw lastError instanceof Error
     ? lastError
-    : new Error(`All ${providerId} API keys are rate-limited. Try again shortly.`);
+    : new Error(`All ${providerId} API keys are unavailable right now.`);
 }

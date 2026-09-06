@@ -69,12 +69,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const upstream = await callProvider(providerId, {
+    const { status, data } = await callProvider(providerId, {
       messages,
       ...(payload.model ? { model: payload.model } : {}),
     });
-    const data = await upstream.json();
-    return NextResponse.json(data, { status: upstream.status, headers: CORS_HEADERS });
+    return NextResponse.json(data, { status, headers: CORS_HEADERS });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Upstream request failed" },

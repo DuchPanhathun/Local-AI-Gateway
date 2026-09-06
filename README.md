@@ -83,6 +83,11 @@ the next one before giving up. This is a best-effort spread (the rotation cursor
 per serverless instance, not a shared counter), not an exact quota tracker — but with N keys spread
 evenly you can sustain roughly `<per-key limit> * N` requests/min before any single key gets hit.
 
+**Groq only** also tracks each key's token usage for the current UTC day, and once a key crosses
+`GROQ_DAILY_TOKEN_LIMIT` (default `500000`) it's skipped in favor of the next key until the day
+rolls over. Same best-effort caveat as the rotation cursor — it's an in-memory counter per warm
+serverless instance, not an exact ledger synced across concurrent instances.
+
 ## Deploying to Vercel (free Hobby plan)
 
 ```bash
