@@ -1,36 +1,97 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ai-thun
 
-## Getting Started
+A Next.js API endpoint that proxies chat requests to [SEA-LION](https://sea-lion.ai) (AI Singapore's
+free, OpenAI-compatible LLM API) or [Cerebras](https://cloud.cerebras.ai), round-robining across
+multiple API keys per provider so it doesn't hit either one's per-key rate limit.
 
-First, run the development server:
+## Setup
+
+```bash
+npm install
+cp .env.example .env   # already done if you're reading this after initial setup
+```
+
+Fill in `.env`:
+
+- `SEA_LION_API_KEY1`, `SEA_LION_API_KEY2`, ... — get keys from the
+  [SEA-LION Playground](https://playground.sea-lion.ai) (one key per Google account; the docs cap it
+  at 1 key per account). The route checks `SEA_LION_API_KEY1` through `SEA_LION_API_KEY21` and uses
+  whichever are set.
+- `CEREBRAS_API_KEY1`, `CEREBRAS_API_KEY2`, ... — get keys from
+  [cloud.cerebras.ai](https://cloud.cerebras.ai). Same `1..21` convention as SEA-LION.
+- `APP_API_KEY` — a secret you make up. Callers must send it back as
+  `Authorization: Bearer <APP_API_KEY>`. This is what stops random people from burning through your
+  free quota once the URL is public. Leave it blank to disable auth entirely.
+- `ALLOWED_ORIGIN` (optional) — restrict CORS to one caller's origin instead of `*`.
+
+Run locally:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Calling the endpoint
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+curl -X POST http://localhost:3000/api/chat \
+  -H "Authorization: Bearer $APP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Hello!"}'
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Or with a full OpenAI-style message array:
 
-## Learn More
+```bash
+curl -X POST http://localhost:3000/api/chat \
+  -H "Authorization: Bearer $APP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Hello!"}]}'
+```
 
-To learn more about Next.js, take a look at the following resources:
+The response is the provider's raw chat-completion JSON (OpenAI-compatible), so
+`response.choices[0].message.content` is the model's reply.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+From a browser or another app, `fetch` it the same way — CORS is open by default (or restricted to
+`ALLOWED_ORIGIN` if you set it).
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Choosing a provider and model
 
-## Deploy on Vercel
+Default is SEA-LION with its default model. Pass `provider` and/or `model` to override either:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+curl -X POST http://localhost:3000/api/chat \
+  -H "Authorization: Bearer $APP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"provider": "cerebras", "model": "gpt-oss-120b", "prompt": "Hello!"}'
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `provider`: `"sea-lion"` (default) or `"cerebras"`.
+- `model`: any model id the chosen provider supports. If omitted, falls back to
+  `SEA_LION_MODEL`/`CEREBRAS_MODEL` from `.env`, or each provider's built-in default.
+
+Known Cerebras models as of writing: `qwen-3.8-27b` (default, most generous quota),
+`gemma-4-31b` (preview, 5 req/min), `gpt-oss-120b` (production, 5 req/min) — check
+[cloud.cerebras.ai](https://cloud.cerebras.ai) for the current list and quotas.
+
+## How key rotation works
+
+`src/lib/ai-providers.ts` round-robins every request across whichever `<PROVIDER>_API_KEY*` vars
+are set for the chosen provider, and if a key comes back rate-limited (HTTP 429) it retries with
+the next one before giving up. This is a best-effort spread (the rotation cursor lives in memory
+per serverless instance, not a shared counter), not an exact quota tracker — but with N keys spread
+evenly you can sustain roughly `<per-key limit> * N` requests/min before any single key gets hit.
+
+## Deploying to Vercel (free Hobby plan)
+
+```bash
+npx vercel        # first deploy, links the project
+npx vercel env add APP_API_KEY production
+npx vercel env add SEA_LION_API_KEY1 production
+# ...repeat env add for each SEA_LION_API_KEY you have
+npx vercel --prod
+```
+
+Or push to GitHub and import the repo at [vercel.com/new](https://vercel.com/new), then add the same
+env vars under Project Settings → Environment Variables before deploying.
+
+The route sets `maxDuration = 60`, the max Vercel allows on the Hobby plan.
