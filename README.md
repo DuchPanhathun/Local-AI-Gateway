@@ -22,7 +22,7 @@ Fill in `.env`:
 - `GROQ_API_KEY1`, `GROQ_API_KEY2`, ... — get keys from
   [console.groq.com/keys](https://console.groq.com/keys). Same `1..21` convention.
 - `APP_API_KEY` — a secret you make up. This is your **owner** credential: it calls `/api/chat`
-  directly, and it's the only thing that can log into `/dashboard` to view quota usage or generate/
+  directly, and it's the only thing that can log into the home page (`/`) to view quota usage or generate/
   revoke API tokens (see below). Leave it blank to disable auth entirely (not recommended once the
   URL is public).
 - `ALLOWED_ORIGIN` (optional) — restrict CORS to one caller's origin instead of `*`.
@@ -95,13 +95,13 @@ serverless instance, not an exact ledger synced across concurrent instances.
 
 ## Dashboard & API tokens
 
-Visit `/dashboard` and sign in with `APP_API_KEY` to:
+Visit the home page (`/`) and sign in with `APP_API_KEY` to:
 
 - See per-key, per-model quota usage (requests/min, tokens/min, requests/day, tokens/day against
   each provider's published limits) — this part is best-effort and in-memory (see caveat above).
 - **Generate API tokens** — separate, revocable credentials you can hand out to other apps/people
   instead of your `APP_API_KEY`. A generated token can call `/api/chat` and *nothing else* — it
-  cannot log into `/dashboard`, list other tokens, or generate more tokens. Only `APP_API_KEY`
+  cannot log into the home page (`/`), list other tokens, or generate more tokens. Only `APP_API_KEY`
   (i.e. only you) can do that. The full token value is shown once, at creation time, then only a
   masked version (`sk-ai-thun-ab12…cd34`) is shown afterward. Revoke any token instantly from the
   same page.
