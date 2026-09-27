@@ -287,6 +287,63 @@
   flex: 1;
 }
 
+/* ---------- Code blocks ---------- */
+
+.codeBlock {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  position: relative;
+  margin-bottom: 12px;
+}
+
+.codeBlockLabel {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+}
+
+.codeBlockBody {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.pre {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.8rem;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+  flex: 1;
+  line-height: 1.6;
+}
+
+.pre .comment {
+  color: var(--text-dim);
+}
+
+.refTable {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.83rem;
+  margin-top: 4px;
+}
+
+.refTable td {
+  padding: 6px 12px 6px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.refTable tr:last-child td {
+  border-bottom: none;
+}
+
 /* ---------- Token reveal ---------- */
 
 .reveal {

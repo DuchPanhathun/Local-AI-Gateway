@@ -31,6 +31,24 @@ type ApiTokenSummary = {
 const STORAGE_KEY = "ai-thun-dashboard-app-key";
 const REFRESH_MS = 15_000;
 
+function CopyButton({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard API unavailable — the value is still visible to select manually
+    }
+  }
+  return (
+    <button className={styles.buttonGhost} onClick={copy}>
+      {copied ? "Copied!" : "Copy"}
+    </button>
+  );
+}
+
 function ProgressBar({ used, limit }: { used: number; limit?: number }) {
   if (!limit) {
     return <span className={styles.dim}>{used.toLocaleString()}</span>;
@@ -63,7 +81,7 @@ export default function Dashboard() {
   const [newToken, setNewToken] = useState<string | null>(null);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [tokenBusy, setTokenBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [origin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
 
   const load = useCallback(async (key: string) => {
     try {
@@ -158,16 +176,6 @@ export default function Dashboard() {
       if (res.ok) await loadTokens(appKey);
     } catch {
       // best-effort — the list will just look stale until next refresh
-    }
-  }
-
-  async function handleCopy(value: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // clipboard API unavailable — the value is still visible to select manually
     }
   }
 
@@ -302,9 +310,7 @@ export default function Dashboard() {
             <div className={styles.revealLabel}>Copy this now — it won&apos;t be shown again</div>
             <div className={styles.revealRow}>
               <span className={styles.revealValue}>{newToken}</span>
-              <button className={styles.buttonGhost} onClick={() => handleCopy(newToken)}>
-                {copied ? "Copied!" : "Copy"}
-              </button>
+              <CopyButton value={newToken} />
               <button className={styles.buttonGhost} onClick={() => setNewToken(null)}>
                 Done
               </button>
@@ -341,6 +347,69 @@ export default function Dashboard() {
           </div>
         )}
         {tokens && tokens.length === 0 && <p className={styles.empty}>No tokens generated yet.</p>}
+      </section>
+
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <span className={styles.sectionTitle}>How to use</span>
+        </div>
+        <p className={styles.sectionDesc}>
+          POST to <code>/api/chat</code> with an <code>Authorization: Bearer</code> header (your
+          APP_API_KEY or any generated token above) and a JSON body.
+        </p>
+
+        <div className={styles.codeBlock}>
+          <div className={styles.codeBlockLabel}>Basic request</div>
+          <div className={styles.codeBlockBody}>
+            <pre className={styles.pre}>{`curl -X POST ${origin}/api/chat \\
+  -H "Authorization: Bearer ${appKey}" \\
+  -H "Content-Type: application/json" \\
+  -d '{"prompt": "Hello!"}'`}</pre>
+            <CopyButton
+              value={`curl -X POST ${origin}/api/chat \\\n  -H "Authorization: Bearer ${appKey}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"prompt": "Hello!"}'`}
+            />
+          </div>
+        </div>
+
+        <div className={styles.codeBlock}>
+          <div className={styles.codeBlockLabel}>Choosing a provider &amp; model</div>
+          <div className={styles.codeBlockBody}>
+            <pre className={styles.pre}>{`curl -X POST ${origin}/api/chat \\
+  -H "Authorization: Bearer ${appKey}" \\
+  -H "Content-Type: application/json" \\
+  -d '{"provider": "groq", "model": "openai/gpt-oss-120b", "prompt": "Hello!"}'`}</pre>
+            <CopyButton
+              value={`curl -X POST ${origin}/api/chat \\\n  -H "Authorization: Bearer ${appKey}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"provider": "groq", "model": "openai/gpt-oss-120b", "prompt": "Hello!"}'`}
+            />
+          </div>
+        </div>
+
+        <p className={styles.sectionDesc} style={{ marginBottom: 8 }}>
+          <code>prompt</code> (string) is a shortcut for a single user message. For multi-turn
+          context, send <code>messages</code> instead:{" "}
+          <code>{`{"messages": [{"role": "user", "content": "Hello!"}]}`}</code>. The response is
+          the provider&apos;s raw OpenAI-style JSON — the reply text is at{" "}
+          <code>response.choices[0].message.content</code>.
+        </p>
+
+        <table className={styles.refTable}>
+          <tbody>
+            <tr>
+              <td className={styles.mono}>provider</td>
+              <td className={styles.dim}>
+                optional, defaults to <code>sea-lion</code> — or <code>cerebras</code> /{" "}
+                <code>groq</code>
+              </td>
+            </tr>
+            <tr>
+              <td className={styles.mono}>model</td>
+              <td className={styles.dim}>
+                optional — any model id the chosen provider supports; falls back to that
+                provider&apos;s configured default
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </section>
 
       {keys === null && <p className={styles.empty}>Loading…</p>}
