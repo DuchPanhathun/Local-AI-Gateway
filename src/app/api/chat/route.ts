@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { callProvider, isProviderId, PROVIDER_IDS } from "@/lib/ai-providers";
 import { isValidGeneratedToken } from "@/lib/api-tokens";
 
-// Hobby plan allows up to 60s per function invocation; SEA-LION responses
-// can be slow, so opt into the max instead of the 10s default.
-export const maxDuration = 60;
+// With Fluid Compute (enabled on this project) the Hobby plan allows up to
+// 300s per invocation, not the pre-Fluid 60s cap — reasoning models like
+// SEA-LION can genuinely take well over a minute on longer prompts.
+export const maxDuration = 300;
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": process.env.ALLOWED_ORIGIN || "*",
@@ -25,6 +26,11 @@ type ChatRequestBody = {
   prompt?: string;
   model?: string;
   provider?: string;
+  // Any other OpenAI-compatible field (max_tokens, temperature, response_format,
+  // reasoning_effort, chat_template_kwargs, top_p, ...) is forwarded as-is —
+  // see the passthrough below. `stream` is deliberately excluded there since
+  // this endpoint always returns a single materialized JSON response.
+  [key: string]: unknown;
 };
 
 const DEFAULT_PROVIDER = "sea-lion";
@@ -72,10 +78,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { provider: _provider, prompt: _prompt, messages: _messages, stream: _stream, ...rest } =
+    payload;
+
   try {
     const { status, data } = await callProvider(providerId, {
       messages,
-      ...(payload.model ? { model: payload.model } : {}),
+      ...rest,
     });
     return NextResponse.json(data, { status, headers: CORS_HEADERS });
   } catch (err) {
