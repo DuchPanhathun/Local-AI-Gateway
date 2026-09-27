@@ -21,10 +21,15 @@ Fill in `.env`:
   [cloud.cerebras.ai](https://cloud.cerebras.ai). Same `1..21` convention as SEA-LION.
 - `GROQ_API_KEY1`, `GROQ_API_KEY2`, ... — get keys from
   [console.groq.com/keys](https://console.groq.com/keys). Same `1..21` convention.
-- `APP_API_KEY` — a secret you make up. Callers must send it back as
-  `Authorization: Bearer <APP_API_KEY>`. This is what stops random people from burning through your
-  free quota once the URL is public. Leave it blank to disable auth entirely.
+- `APP_API_KEY` — a secret you make up. This is your **owner** credential: it calls `/api/chat`
+  directly, and it's the only thing that can log into `/dashboard` to view quota usage or generate/
+  revoke API tokens (see below). Leave it blank to disable auth entirely (not recommended once the
+  URL is public).
 - `ALLOWED_ORIGIN` (optional) — restrict CORS to one caller's origin instead of `*`.
+- `EDGE_CONFIG`, `EDGE_CONFIG_ID`, `VERCEL_TEAM_ID`, `VERCEL_API_TOKEN` — back the dynamic API token
+  store (see **Dashboard & API tokens** below). Not needed for `/api/chat` itself to work with
+  `APP_API_KEY` alone; only needed if you want to generate separate, revocable tokens for other
+  callers.
 
 Run locally:
 
@@ -87,6 +92,30 @@ evenly you can sustain roughly `<per-key limit> * N` requests/min before any sin
 `GROQ_DAILY_TOKEN_LIMIT` (default `500000`) it's skipped in favor of the next key until the day
 rolls over. Same best-effort caveat as the rotation cursor — it's an in-memory counter per warm
 serverless instance, not an exact ledger synced across concurrent instances.
+
+## Dashboard & API tokens
+
+Visit `/dashboard` and sign in with `APP_API_KEY` to:
+
+- See per-key, per-model quota usage (requests/min, tokens/min, requests/day, tokens/day against
+  each provider's published limits) — this part is best-effort and in-memory (see caveat above).
+- **Generate API tokens** — separate, revocable credentials you can hand out to other apps/people
+  instead of your `APP_API_KEY`. A generated token can call `/api/chat` and *nothing else* — it
+  cannot log into `/dashboard`, list other tokens, or generate more tokens. Only `APP_API_KEY`
+  (i.e. only you) can do that. The full token value is shown once, at creation time, then only a
+  masked version (`sk-ai-thun-ab12…cd34`) is shown afterward. Revoke any token instantly from the
+  same page.
+
+Unlike the quota numbers, the token list is **not** best-effort — it's stored in
+[Vercel Edge Config](https://vercel.com/docs/edge-config), a real external store, so every
+serverless instance and every deployment sees the same list and a revoke takes effect immediately.
+
+Setting this up requires four env vars (`EDGE_CONFIG`, `EDGE_CONFIG_ID`, `VERCEL_TEAM_ID`,
+`VERCEL_API_TOKEN`) pointing at an Edge Config store and a Vercel API token with write access to it.
+**Security note:** Vercel doesn't support minting a narrowly-scoped token for just one Edge Config
+via API, so `VERCEL_API_TOKEN` here has full account access — treat it exactly like your Vercel
+login (stored server-side only, never sent to the browser, but rotate it via
+`vercel logout && vercel login` plus updating the env var if you ever suspect it leaked).
 
 ## Deploying to Vercel (free Hobby plan)
 

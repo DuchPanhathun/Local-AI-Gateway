@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callProvider, isProviderId, PROVIDER_IDS } from "@/lib/ai-providers";
+import { isValidGeneratedToken } from "@/lib/api-tokens";
 
 // Hobby plan allows up to 60s per function invocation; SEA-LION responses
 // can be slow, so opt into the max instead of the 10s default.
@@ -32,7 +33,10 @@ export async function POST(req: NextRequest) {
   const appKey = process.env.APP_API_KEY;
   if (appKey) {
     const auth = req.headers.get("authorization");
-    if (auth !== `Bearer ${appKey}`) {
+    const bearer = auth?.startsWith("Bearer ") ? auth.slice(7) : undefined;
+    const isOwner = bearer === appKey;
+    const isGeneratedToken = !isOwner && !!bearer && (await isValidGeneratedToken(bearer));
+    if (!isOwner && !isGeneratedToken) {
       return unauthorized();
     }
   }

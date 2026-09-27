@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 type Limits = {
   requestsPerMin?: number;
@@ -18,6 +18,13 @@ type KeyUsage = {
   requestsToday: number;
   tokensToday: number;
   limits?: Limits;
+};
+
+type ApiTokenSummary = {
+  id: string;
+  label: string;
+  createdAt: string;
+  masked: string;
 };
 
 const STORAGE_KEY = "ai-thun-dashboard-app-key";
@@ -50,6 +57,12 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
 
+  const [tokens, setTokens] = useState<ApiTokenSummary[] | null>(null);
+  const [tokenLabel, setTokenLabel] = useState("");
+  const [newToken, setNewToken] = useState<string | null>(null);
+  const [tokenError, setTokenError] = useState<string | null>(null);
+  const [tokenBusy, setTokenBusy] = useState(false);
+
   const load = useCallback(async (key: string) => {
     try {
       const res = await fetch("/api/quotas", {
@@ -74,12 +87,28 @@ export default function Dashboard() {
     }
   }, []);
 
+  const loadTokens = useCallback(async (key: string) => {
+    try {
+      const res = await fetch("/api/tokens", {
+        headers: { Authorization: `Bearer ${key}` },
+      });
+      if (!res.ok) return; // errors here are non-fatal to the rest of the page
+      const data = await res.json();
+      setTokens(data.tokens);
+    } catch {
+      // network hiccup — leave the previous list showing
+    }
+  }, []);
+
   useEffect(() => {
     if (!appKey) return;
     let cancelled = false;
 
     async function tick() {
-      if (!cancelled && appKey) await load(appKey);
+      if (!cancelled && appKey) {
+        await load(appKey);
+        await loadTokens(appKey);
+      }
     }
 
     void tick();
@@ -88,7 +117,47 @@ export default function Dashboard() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [appKey, load]);
+  }, [appKey, load, loadTokens]);
+
+  async function handleCreateToken(e: FormEvent) {
+    e.preventDefault();
+    if (!appKey) return;
+    setTokenBusy(true);
+    setTokenError(null);
+    try {
+      const res = await fetch("/api/tokens", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${appKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ label: tokenLabel }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setTokenError(data.error || `Failed (HTTP ${res.status})`);
+        return;
+      }
+      setNewToken(data.token);
+      setTokenLabel("");
+      await loadTokens(appKey);
+    } catch {
+      setTokenError("Network error creating token");
+    } finally {
+      setTokenBusy(false);
+    }
+  }
+
+  async function handleRevoke(id: string) {
+    if (!appKey) return;
+    if (!confirm("Revoke this token? Anything using it will stop working immediately.")) return;
+    try {
+      const res = await fetch(`/api/tokens?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${appKey}` },
+      });
+      if (res.ok) await loadTokens(appKey);
+    } catch {
+      // best-effort — the list will just look stale until next refresh
+    }
+  }
 
   if (!appKey) {
     return (
@@ -139,6 +208,84 @@ export default function Dashboard() {
           Sign out
         </button>
       </div>
+
+      <section style={{ marginTop: "1.5rem" }}>
+        <h2>API tokens</h2>
+        <p style={{ color: "#888", fontSize: 12 }}>
+          Tokens you generate here can call <code>/api/chat</code> (and nothing else) —
+          hand them to other apps instead of your APP_API_KEY, and revoke individually
+          whenever you want.
+        </p>
+
+        <form onSubmit={handleCreateToken} style={{ display: "flex", gap: 8, margin: "0.5rem 0" }}>
+          <input
+            value={tokenLabel}
+            onChange={(e) => setTokenLabel(e.target.value)}
+            placeholder="Label (e.g. my other app)"
+            style={{ flex: 1, padding: 8, fontFamily: "monospace" }}
+          />
+          <button type="submit" disabled={tokenBusy} style={{ padding: "8px 16px" }}>
+            {tokenBusy ? "Generating…" : "Generate token"}
+          </button>
+        </form>
+
+        {tokenError && <p style={{ color: "#ff5555" }}>{tokenError}</p>}
+
+        {newToken && (
+          <div
+            style={{
+              background: "#111",
+              color: "#4ade80",
+              padding: "0.75rem 1rem",
+              borderRadius: 8,
+              margin: "0.5rem 0",
+              wordBreak: "break-all",
+            }}
+          >
+            <div style={{ color: "#e5c07b", marginBottom: 4 }}>
+              Copy this now — it won&apos;t be shown again:
+            </div>
+            {newToken}
+            <div style={{ marginTop: 8 }}>
+              <button onClick={() => setNewToken(null)} style={{ padding: "4px 10px" }}>
+                Done
+              </button>
+            </div>
+          </div>
+        )}
+
+        {tokens && tokens.length > 0 && (
+          <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
+            <thead>
+              <tr style={{ textAlign: "left", borderBottom: "1px solid #333" }}>
+                <th style={{ padding: "6px 10px" }}>Label</th>
+                <th style={{ padding: "6px 10px" }}>Token</th>
+                <th style={{ padding: "6px 10px" }}>Created</th>
+                <th style={{ padding: "6px 10px" }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {tokens.map((t) => (
+                <tr key={t.id} style={{ borderBottom: "1px solid #222" }}>
+                  <td style={{ padding: "6px 10px" }}>{t.label}</td>
+                  <td style={{ padding: "6px 10px", color: "#888" }}>{t.masked}</td>
+                  <td style={{ padding: "6px 10px", color: "#888" }}>
+                    {new Date(t.createdAt).toLocaleDateString()}
+                  </td>
+                  <td style={{ padding: "6px 10px" }}>
+                    <button onClick={() => handleRevoke(t.id)} style={{ padding: "2px 8px" }}>
+                      Revoke
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {tokens && tokens.length === 0 && (
+          <p style={{ color: "#888" }}>No tokens generated yet.</p>
+        )}
+      </section>
 
       {error && <p style={{ color: "#ff5555" }}>{error}</p>}
       {generatedAt && (
