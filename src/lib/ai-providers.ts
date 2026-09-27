@@ -39,45 +39,117 @@ export function isProviderId(value: string): value is ProviderId {
   return Object.prototype.hasOwnProperty.call(PROVIDERS, value);
 }
 
+// Published quota reference, for the dashboard only — not enforced here
+// (enforcement is the 429-retry + Groq daily-limit skip below). SEA-LION and
+// Groq limits are uniform across models ("*"); Cerebras varies per model.
+type QuotaLimits = {
+  requestsPerMin?: number;
+  requestsPerDay?: number;
+  tokensPerMin?: number;
+  tokensPerDay?: number;
+};
+const KNOWN_LIMITS: Partial<Record<ProviderId, Record<string, QuotaLimits>>> = {
+  "sea-lion": { "*": { requestsPerMin: 10 } },
+  cerebras: {
+    "qwen-3.8-27b": {
+      requestsPerMin: 450,
+      requestsPerDay: 648_000,
+      tokensPerMin: 450_000,
+      tokensPerDay: 648_000_000,
+    },
+    "gemma-4-31b": {
+      requestsPerMin: 5,
+      requestsPerDay: 2_400,
+      tokensPerMin: 90_000,
+      tokensPerDay: 3_000_000,
+    },
+    "gpt-oss-120b": {
+      requestsPerMin: 5,
+      requestsPerDay: 2_400,
+      tokensPerMin: 90_000,
+      tokensPerDay: 3_000_000,
+    },
+  },
+  // Not Groq's real platform limit — this is our own rotation cutoff, shown
+  // so the dashboard can render it as a "budget" the same way as the others.
+  groq: { "*": { tokensPerDay: PROVIDERS.groq.dailyTokenLimitPerKey } },
+};
+
+function limitsFor(providerId: ProviderId, model: string): QuotaLimits | undefined {
+  const table = KNOWN_LIMITS[providerId];
+  if (!table) return undefined;
+  return table[model] ?? table["*"];
+}
+
 const MAX_KEYS_PER_PROVIDER = 21;
 
 // One rotation cursor per provider, so calling Cerebras doesn't perturb
 // SEA-LION's rotation and vice versa. Best-effort — lives per warm instance.
 const cursors = new Map<ProviderId, number>();
 
-// Per-key daily token usage (Groq only). Keyed by "<providerId>:<key>", reset
-// whenever the tracked UTC day no longer matches today. Same caveat as the
-// rotation cursor: in-memory per warm instance, not synced across concurrent
-// serverless instances or cold starts — a best-effort spread, not an exact
-// quota ledger.
-type UsageEntry = { day: string; tokens: number };
-const dailyUsage = new Map<string, UsageEntry>();
+// Usage tracking, keyed by "<providerId>:<key>:<model>" — granular by model
+// because Cerebras quotas differ per model; SEA-LION/Groq just get one model
+// row in practice. Best-effort, in-memory per warm serverless instance: not
+// synced across concurrent instances or cold starts. A TODO exists to back
+// this with Upstash Redis for exact, persistent counts once that's wired up.
+type UsageEntry = {
+  day: string;
+  dayRequests: number;
+  dayTokens: number;
+  // recent {timestamp, tokens} pairs, pruned to the last 60s on read
+  recent: { ts: number; tokens: number }[];
+};
+const usage = new Map<string, UsageEntry>();
 
 function todayUTC(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function getUsedTokens(providerId: ProviderId, key: string): number {
-  const entry = dailyUsage.get(`${providerId}:${key}`);
-  return entry && entry.day === todayUTC() ? entry.tokens : 0;
+function usageKey(providerId: ProviderId, key: string, model: string): string {
+  return `${providerId}:${key}:${model}`;
 }
 
-function addUsedTokens(providerId: ProviderId, key: string, tokens: number): void {
-  const mapKey = `${providerId}:${key}`;
+function recordUsage(
+  providerId: ProviderId,
+  key: string,
+  model: string,
+  tokens: number
+): void {
+  const mapKey = usageKey(providerId, key, model);
   const day = todayUTC();
-  const entry = dailyUsage.get(mapKey);
-  if (entry && entry.day === day) {
-    entry.tokens += tokens;
-  } else {
-    dailyUsage.set(mapKey, { day, tokens });
+  const now = Date.now();
+  const existing = usage.get(mapKey);
+
+  if (!existing || existing.day !== day) {
+    usage.set(mapKey, {
+      day,
+      dayRequests: 1,
+      dayTokens: tokens,
+      recent: [{ ts: now, tokens }],
+    });
+    return;
   }
+
+  existing.dayRequests += 1;
+  existing.dayTokens += tokens;
+  existing.recent.push({ ts: now, tokens });
+  // Prune anything older than 60s, and cap the array so memory can't grow
+  // unbounded under sustained traffic within a single warm instance.
+  const cutoff = now - 60_000;
+  existing.recent = existing.recent.filter((e) => e.ts >= cutoff).slice(-500);
 }
 
-function collectKeys(prefix: string): string[] {
-  const keys: string[] = [];
+function getDayTokens(providerId: ProviderId, key: string, model: string): number {
+  const entry = usage.get(usageKey(providerId, key, model));
+  return entry && entry.day === todayUTC() ? entry.dayTokens : 0;
+}
+
+function collectKeys(prefix: string): { name: string; key: string }[] {
+  const keys: { name: string; key: string }[] = [];
   for (let i = 1; i <= MAX_KEYS_PER_PROVIDER; i++) {
-    const key = process.env[`${prefix}${i}`];
-    if (key) keys.push(key);
+    const name = `${prefix}${i}`;
+    const key = process.env[name];
+    if (key) keys.push({ name, key });
   }
   return keys;
 }
@@ -96,16 +168,17 @@ export async function callProvider(
     );
   }
 
+  const model = (body.model as string | undefined) || config.defaultModel;
   let cursor = cursors.get(providerId) ?? 0;
   let lastError: unknown;
 
   for (let attempt = 0; attempt < keys.length; attempt++) {
-    const key = keys[cursor % keys.length];
+    const { key } = keys[cursor % keys.length];
     cursor++;
 
     if (
       config.dailyTokenLimitPerKey &&
-      getUsedTokens(providerId, key) >= config.dailyTokenLimitPerKey
+      getDayTokens(providerId, key, model) >= config.dailyTokenLimitPerKey
     ) {
       lastError = new Error(
         `${providerId} key hit its daily token limit (${config.dailyTokenLimitPerKey})`
@@ -135,13 +208,9 @@ export async function callProvider(
 
     const data: unknown = await res.json();
 
-    if (config.dailyTokenLimitPerKey) {
-      const totalTokens = (data as { usage?: { total_tokens?: number } })?.usage
-        ?.total_tokens;
-      if (typeof totalTokens === "number") {
-        addUsedTokens(providerId, key, totalTokens);
-      }
-    }
+    const totalTokens = (data as { usage?: { total_tokens?: number } })?.usage
+      ?.total_tokens;
+    recordUsage(providerId, key, model, typeof totalTokens === "number" ? totalTokens : 0);
 
     cursors.set(providerId, cursor);
     return { status: res.status, data };
@@ -151,4 +220,59 @@ export async function callProvider(
   throw lastError instanceof Error
     ? lastError
     : new Error(`All ${providerId} API keys are unavailable right now.`);
+}
+
+export type KeyUsageSnapshot = {
+  provider: ProviderId;
+  keyName: string; // env var name, e.g. "SEA_LION_API_KEY3" — never the raw secret
+  model: string;
+  requestsLast60s: number;
+  tokensLast60s: number;
+  requestsToday: number;
+  tokensToday: number;
+  limits: QuotaLimits | undefined;
+};
+
+// Every configured key is included even if it's never been called yet (shown
+// with all-zero usage), so the dashboard reflects the full key inventory.
+export function getUsageSnapshot(): KeyUsageSnapshot[] {
+  const now = Date.now();
+  const cutoff = now - 60_000;
+  const snapshot: KeyUsageSnapshot[] = [];
+
+  for (const providerId of PROVIDER_IDS) {
+    const config = PROVIDERS[providerId];
+    const keys = collectKeys(config.keyEnvPrefix);
+
+    for (const { name, key } of keys) {
+      // Find every model this key has actually been used with, defaulting to
+      // just the provider's default model when it's never been called.
+      const modelsUsed = new Set<string>();
+      for (const mapKey of usage.keys()) {
+        if (mapKey.startsWith(`${providerId}:${key}:`)) {
+          modelsUsed.add(mapKey.slice(`${providerId}:${key}:`.length));
+        }
+      }
+      if (modelsUsed.size === 0) modelsUsed.add(config.defaultModel);
+
+      for (const model of modelsUsed) {
+        const entry = usage.get(usageKey(providerId, key, model));
+        const isToday = entry && entry.day === todayUTC();
+        const recent = isToday ? entry.recent.filter((e) => e.ts >= cutoff) : [];
+
+        snapshot.push({
+          provider: providerId,
+          keyName: name,
+          model,
+          requestsLast60s: recent.length,
+          tokensLast60s: recent.reduce((sum, e) => sum + e.tokens, 0),
+          requestsToday: isToday ? entry.dayRequests : 0,
+          tokensToday: isToday ? entry.dayTokens : 0,
+          limits: limitsFor(providerId, model),
+        });
+      }
+    }
+  }
+
+  return snapshot;
 }
