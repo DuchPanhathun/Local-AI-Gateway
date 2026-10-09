@@ -72,7 +72,13 @@ const KNOWN_LIMITS: Partial<Record<ProviderId, Record<string, QuotaLimits>>> = {
   },
   // Not Groq's real platform limit — this is our own rotation cutoff, shown
   // so the dashboard can render it as a "budget" the same way as the others.
-  groq: { "*": { tokensPerDay: PROVIDERS.groq.dailyTokenLimitPerKey } },
+  // The Whisper rows are Groq's published per-key limits for speech-to-text
+  // (/api/transcribe), which counts requests, not tokens.
+  groq: {
+    "*": { tokensPerDay: PROVIDERS.groq.dailyTokenLimitPerKey },
+    "whisper-large-v3-turbo": { requestsPerMin: 20, requestsPerDay: 2_000 },
+    "whisper-large-v3": { requestsPerMin: 20, requestsPerDay: 2_000 },
+  },
 };
 
 function limitsFor(providerId: ProviderId, model: string): QuotaLimits | undefined {
@@ -275,4 +281,82 @@ export function getUsageSnapshot(): KeyUsageSnapshot[] {
   }
 
   return snapshot;
+}
+
+// Speech-to-text goes to Groq's Whisper, in OpenAI's /audio/transcriptions
+// format, over the same GROQ_API_KEY* keys and rotation cursor as chat. Its
+// limits are counted per key and per model, so they don't eat into chat's.
+const TRANSCRIBE_MODEL = process.env.GROQ_TRANSCRIBE_MODEL || "whisper-large-v3-turbo";
+
+export type TranscriptionResult = {
+  status: number;
+  body: string;
+  contentType: string;
+  // Seconds, as Groq sent it, when every key was rate limited (status 429).
+  retryAfter?: string;
+};
+
+// `form` is the multipart body for Groq: the audio in `file`, plus any of its
+// other fields. The answer is passed back as Groq sent it (JSON, or plain text
+// for response_format=text). If every key is rate limited, the result is a 429
+// with the shortest wait any key asked for.
+export async function transcribeWithGroq(form: FormData): Promise<TranscriptionResult> {
+  const config = PROVIDERS.groq;
+  const keys = collectKeys(config.keyEnvPrefix);
+  if (keys.length === 0) {
+    throw new Error(`No ${config.keyEnvPrefix}* environment variables are set for provider "groq".`);
+  }
+  if (!form.get("model")) form.set("model", TRANSCRIBE_MODEL);
+  const model = String(form.get("model"));
+
+  let cursor = cursors.get("groq") ?? 0;
+  let lastError: unknown;
+  let limited = 0;
+  let retryAfter: string | undefined;
+
+  for (let attempt = 0; attempt < keys.length; attempt++) {
+    const { key } = keys[cursor % keys.length];
+    cursor++;
+
+    let res: Response;
+    try {
+      res = await fetch(`${config.baseUrl}/audio/transcriptions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}` },
+        body: form,
+      });
+    } catch (err) {
+      lastError = err;
+      continue;
+    }
+
+    if (res.status === 429) {
+      limited++;
+      const wait = res.headers.get("retry-after");
+      if (wait && (retryAfter === undefined || Number(wait) < Number(retryAfter))) retryAfter = wait;
+      lastError = new Error("groq key hit its rate limit (429)");
+      continue;
+    }
+
+    recordUsage("groq", key, model, 0);
+    cursors.set("groq", cursor);
+    return {
+      status: res.status,
+      body: await res.text(),
+      contentType: res.headers.get("content-type") ?? "application/json",
+    };
+  }
+
+  cursors.set("groq", cursor);
+  if (limited === keys.length) {
+    return {
+      status: 429,
+      body: JSON.stringify({ error: "Every groq key hit its rate limit (429)." }),
+      contentType: "application/json",
+      retryAfter,
+    };
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("All groq API keys are unavailable right now.");
 }

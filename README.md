@@ -80,6 +80,34 @@ Known Cerebras models as of writing: `qwen-3.8-27b` (default, most generous quot
 `gemma-4-31b` (preview, 5 req/min), `gpt-oss-120b` (production, 5 req/min) — check
 [cloud.cerebras.ai](https://cloud.cerebras.ai) for the current list and quotas.
 
+## Speech-to-text
+
+`POST /api/transcribe` turns audio into text with Groq's Whisper, using the same `GROQ_API_KEY*` keys and
+rotation as chat. It takes the same multipart form as OpenAI's and Groq's `/audio/transcriptions`, so
+OpenAI-compatible clients only need its address and your key:
+
+```bash
+curl -X POST http://localhost:3000/api/transcribe \
+  -H "Authorization: Bearer $APP_API_KEY" \
+  -F file=@line.wav \
+  -F response_format=json
+```
+
+```json
+{"text": " I waited for you until midnight.", "x_groq": {"id": "req_…"}}
+```
+
+- `file` (required): the audio, as a file upload. Vercel caps a request at 4.5 MB.
+- `model`: defaults to `GROQ_TRANSCRIBE_MODEL` from `.env`, else `whisper-large-v3-turbo` (Groq's fastest).
+- `prompt`, `language`, `response_format` (`json`, `verbose_json` or `text`) and `temperature` are passed on
+  to Groq; other fields are dropped.
+
+The answer is Groq's, as Groq sent it. Groq limits each key to 20 Whisper requests a minute and 2,000 a day
+(its published figures for the Developer plan; your Groq console shows your own) and bills each request as at
+least 10 seconds of audio. A key that answers 429 is skipped for the next one; when every key is limited, the
+caller gets the 429 with a `Retry-After` header, the shortest wait any key asked for. The dashboard counts
+Whisper requests per key, next to chat.
+
 ## How key rotation works
 
 `src/lib/ai-providers.ts` round-robins every request across whichever `<PROVIDER>_API_KEY*` vars
@@ -100,7 +128,7 @@ Visit the home page (`/`) and sign in with `APP_API_KEY` to:
 - See per-key, per-model quota usage (requests/min, tokens/min, requests/day, tokens/day against
   each provider's published limits) — this part is best-effort and in-memory (see caveat above).
 - **Generate API tokens** — separate, revocable credentials you can hand out to other apps/people
-  instead of your `APP_API_KEY`. A generated token can call `/api/chat` and *nothing else* — it
+  instead of your `APP_API_KEY`. A generated token can call `/api/chat` and `/api/transcribe` and *nothing else* — it
   cannot log into the home page (`/`), list other tokens, or generate more tokens. Only `APP_API_KEY`
   (i.e. only you) can do that. The full token value is shown once, at creation time, then only a
   masked version (`sk-ai-thun-ab12…cd34`) is shown afterward. Revoke any token instantly from the
