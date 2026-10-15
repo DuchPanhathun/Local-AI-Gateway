@@ -14,12 +14,23 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "ai-thun",
-  description: "AI gateway — SEA-LION, Cerebras, and Groq behind one endpoint.",
+  description: "AI gateway — cloud APIs and local agent CLIs behind one endpoint.",
 };
+
+// Runs before first paint so a saved Light/Dark choice doesn't flash the
+// other theme. "System" stores nothing and lets prefers-color-scheme decide.
+const THEME_SCRIPT = `try{var t=localStorage.getItem("ai-thun-theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}`;
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
+    <html
+      lang="en"
+      className={`${geistSans.variable} ${geistMono.variable}`}
+      suppressHydrationWarning
+    >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+      </head>
       <body>{children}</body>
     </html>
   );

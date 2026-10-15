@@ -1,0 +1,21 @@
+# systemd *user* service for ai-thun (Next.js AI gateway), mirroring
+# local-agent-gateway.service. Installed as ~/.config/systemd/user/ai-thun.service.
+# %h is the user's home.
+[Unit]
+Description=ai-thun (Next.js AI gateway: cloud providers + local-agent-gateway proxy)
+After=local-agent-gateway.service
+Wants=local-agent-gateway.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Desktop/documents/Project/ai-thun
+Environment=PATH=%h/.nvm/versions/node/v24.22.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=HOSTNAME=127.0.0.1
+Environment=PORT=3000
+ExecStart=%h/.nvm/versions/node/v24.22.0/bin/node %h/Desktop/documents/Project/ai-thun/node_modules/.bin/next start -H 127.0.0.1 -p 3000
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

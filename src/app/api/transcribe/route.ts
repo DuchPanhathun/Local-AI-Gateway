@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { transcribeWithGroq } from "@/lib/ai-providers";
 import { isValidGeneratedToken } from "@/lib/api-tokens";
+import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
 
 // Whisper on Groq answers in about a second; this leaves room for trying every key.
 export const maxDuration = 60;
@@ -47,6 +48,11 @@ export async function POST(req: NextRequest) {
     if (!isOwner && !isGeneratedToken) {
       return unauthorized();
     }
+  }
+
+  // Transcription runs on the Groq keys, so pausing Groq pauses it too.
+  if (await isProviderPaused("groq")) {
+    return NextResponse.json({ error: pausedMessage("groq") }, { status: 503, headers: CORS_HEADERS });
   }
 
   let incoming: FormData;
