@@ -245,6 +245,10 @@ dark themes, following the OS unless you pick one in the sidebar):
 - **Manage** — pause or resume providers, API reference with copyable requests, and local CLI
   status.
 
+The full API documentation is at **`/documents`**: every endpoint, field, response and error, with
+curl, JavaScript and Python examples. It needs no sign-in, since it holds no keys (examples read
+them from `$AI_THUN_URL` and `$AI_THUN_KEY`).
+
 `GET /api/quotas` (owner-only) returns the same numbers: `keys` (every cloud key), `local` (each
 CLI and model used today) and `paused`.
 

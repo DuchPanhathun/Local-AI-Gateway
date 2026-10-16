@@ -4,6 +4,7 @@ import { isValidGeneratedToken } from "@/lib/api-tokens";
 import {
   askStream,
   isLocalAgentProviderId,
+  lastUserMessage,
   LOCAL_AGENT_PROVIDER_IDS,
   recordLocalRun,
   relayStream,
@@ -75,19 +76,24 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const providerId = payload.provider;
+  // Same default as /api/chat.
+  const providerId = payload.provider ?? "sea-lion";
 
-  if (providerId && (await isProviderPaused(providerId))) {
+  if (await isProviderPaused(providerId)) {
     return NextResponse.json(
       { error: pausedMessage(providerId) },
       { status: 503, headers: CORS_HEADERS }
     );
   }
 
-  if (providerId && isLocalAgentProviderId(providerId)) {
-    if (typeof payload.prompt !== "string" || !payload.prompt) {
+  if (isLocalAgentProviderId(providerId)) {
+    const prompt =
+      typeof payload.prompt === "string" && payload.prompt
+        ? payload.prompt
+        : lastUserMessage(payload.messages);
+    if (!prompt) {
       return NextResponse.json(
-        { error: "Provide `prompt` (string)" },
+        { error: "Provide `prompt` (string) for local-agent providers" },
         { status: 400, headers: CORS_HEADERS }
       );
     }
@@ -97,7 +103,7 @@ export async function POST(req: NextRequest) {
       const upstream = await askStream(
         {
           provider: providerId,
-          prompt: payload.prompt,
+          prompt,
           ...(model ? { model } : {}),
           ...(payload.session_id ? { session_id: payload.session_id } : {}),
           ...(payload.workdir ? { workdir: payload.workdir } : {}),
@@ -126,10 +132,10 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  if (!providerId || !isProviderId(providerId)) {
+  if (!isProviderId(providerId)) {
     return NextResponse.json(
       {
-        error: `Unknown provider "${providerId ?? ""}". Supported: ${[
+        error: `Unknown provider "${providerId}". Supported: ${[
           ...PROVIDER_IDS,
           ...LOCAL_AGENT_PROVIDER_IDS,
         ].join(", ")}`,

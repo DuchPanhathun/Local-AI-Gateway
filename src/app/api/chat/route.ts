@@ -4,6 +4,7 @@ import { isValidGeneratedToken } from "@/lib/api-tokens";
 import {
   ask as askLocalAgent,
   isLocalAgentProviderId,
+  lastUserMessage,
   LOCAL_AGENT_PROVIDER_IDS,
   normalizeAskResponse,
   recordLocalRun,
@@ -51,19 +52,6 @@ type ChatRequestBody = {
 
 const DEFAULT_PROVIDER = "sea-lion";
 
-// local-agent providers take a single prompt string, not a messages array —
-// if the caller only sent `messages`, fall back to the last user turn's text.
-function lastUserText(messages: unknown): string | null {
-  if (!Array.isArray(messages)) return null;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m && typeof m === "object" && "content" in m && typeof m.content === "string") {
-      return m.content;
-    }
-  }
-  return null;
-}
-
 export async function POST(req: NextRequest) {
   const appKey = process.env.APP_API_KEY;
   if (appKey) {
@@ -97,7 +85,7 @@ export async function POST(req: NextRequest) {
 
   if (isLocalAgentProviderId(providerId)) {
     const prompt =
-      typeof payload.prompt === "string" ? payload.prompt : lastUserText(payload.messages);
+      typeof payload.prompt === "string" ? payload.prompt : lastUserMessage(payload.messages);
     if (!prompt) {
       return NextResponse.json(
         { error: "Provide `prompt` (string) for local-agent providers" },

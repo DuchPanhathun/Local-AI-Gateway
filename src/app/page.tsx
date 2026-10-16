@@ -9,7 +9,9 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import Link from "next/link";
 import styles from "./page.module.css";
+import { getThemePref, setThemePref, subscribeTheme, type ThemePref } from "./theme";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -150,15 +152,12 @@ type ChatMessage = {
 };
 
 type View = "dashboard" | "playground" | "api-keys" | "analytics" | "manage";
-type ThemePref = "system" | "light" | "dark";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 const STORAGE_KEY = "ai-thun-dashboard-app-key";
-const THEME_KEY = "ai-thun-theme";
-const THEME_EVENT = "ai-thun-theme-change";
 const REFRESH_MS = 15_000;
 
 const NAV_ITEMS: {
@@ -602,41 +601,6 @@ function setSessionKey(key: string | null) {
     // storage blocked — the key just won't survive a reload
   }
   window.dispatchEvent(new Event(SESSION_EVENT));
-}
-
-// Theme preference lives in localStorage; read through useSyncExternalStore
-// so the server render ("system") and the client don't disagree.
-function subscribeTheme(callback: () => void) {
-  window.addEventListener("storage", callback);
-  window.addEventListener(THEME_EVENT, callback);
-  return () => {
-    window.removeEventListener("storage", callback);
-    window.removeEventListener(THEME_EVENT, callback);
-  };
-}
-
-function getThemePref(): ThemePref {
-  try {
-    const t = localStorage.getItem(THEME_KEY);
-    return t === "light" || t === "dark" ? t : "system";
-  } catch {
-    return "system";
-  }
-}
-
-function setThemePref(t: ThemePref) {
-  try {
-    if (t === "system") {
-      localStorage.removeItem(THEME_KEY);
-      document.documentElement.removeAttribute("data-theme");
-    } else {
-      localStorage.setItem(THEME_KEY, t);
-      document.documentElement.setAttribute("data-theme", t);
-    }
-  } catch {
-    // storage blocked — the choice just won't persist
-  }
-  window.dispatchEvent(new Event(THEME_EVENT));
 }
 
 // ---------------------------------------------------------------------------
@@ -1646,19 +1610,15 @@ export default function Dashboard() {
             </span>
           </span>
         </button>
-        <button
-          type="button"
-          className={styles.actionRow}
-          onClick={() => setView("manage")}
-        >
+        <Link href="/documents" className={styles.actionRow}>
           <span className={styles.statIcon}>
             <Icon name="book" />
           </span>
           <span>
-            <span className={styles.actionTitle}>Read the API reference</span>
+            <span className={styles.actionTitle}>Read the documentation</span>
             <span className={styles.actionDesc}>Requests, payloads, models</span>
           </span>
-        </button>
+        </Link>
       </div>
     </>
   );
@@ -2434,7 +2394,12 @@ export default function Dashboard() {
           Send <code>Authorization: Bearer</code> with your APP_API_KEY or an
           access token, and a JSON body. <code>/api/chat</code> returns one JSON
           response; <code>/api/chat/stream</code> takes the same body and
-          streams Server-Sent Events.
+          streams Server-Sent Events. Every endpoint, field and response is in
+          the{" "}
+          <Link href="/documents" className={styles.inlineLink}>
+            documentation
+          </Link>
+          .
         </p>
 
         <div className={styles.codeBlock}>
@@ -2655,6 +2620,10 @@ export default function Dashboard() {
               {item.label}
             </button>
           ))}
+          <Link href="/documents" className={styles.navItem}>
+            <Icon name="book" className={styles.navIcon} />
+            Documents
+          </Link>
         </nav>
 
         <div className={styles.navFooter}>

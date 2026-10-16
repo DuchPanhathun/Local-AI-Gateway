@@ -20,6 +20,18 @@ export function isLocalAgentProviderId(value: string): value is LocalAgentProvid
   return (LOCAL_AGENT_PROVIDER_IDS as string[]).includes(value);
 }
 
+// The CLIs take one prompt string, not a conversation: they keep their own
+// history (resumed by session_id). A caller that sends an OpenAI-style
+// `messages` array instead gets its last user message sent.
+export function lastUserMessage(messages: unknown): string | null {
+  if (!Array.isArray(messages)) return null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i] as { role?: unknown; content?: unknown } | null;
+    if (m?.role === "user" && typeof m.content === "string" && m.content) return m.content;
+  }
+  return null;
+}
+
 function baseUrl(): string {
   return process.env.LOCAL_AGENT_URL || "http://127.0.0.1:8787";
 }
