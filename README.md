@@ -1,6 +1,8 @@
-# ai-thun
+# Thun Murex
 
-A Next.js API endpoint that proxies chat requests to cloud providers —
+<img src="public/thun-murex-logo.svg" alt="Thun Murex logo" width="72">
+
+**Thun Murex** (this repository: `ai-thun`) is a Next.js API endpoint that proxies chat requests to cloud providers —
 [SEA-LION](https://sea-lion.ai) (AI Singapore's free, OpenAI-compatible LLM API),
 [Cerebras](https://cloud.cerebras.ai), or [Groq](https://console.groq.com), round-robining across
 multiple API keys per provider so it doesn't hit any one key's rate limit — **and** to real AI

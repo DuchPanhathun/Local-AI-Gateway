@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ai-thun",
-  description: "AI gateway — cloud APIs and local agent CLIs behind one endpoint.",
+  title: { default: "Thun Murex", template: "%s · Thun Murex" },
+  description: "Thun Murex: an AI gateway with cloud APIs and local agent CLIs behind one endpoint.",
+  applicationName: "Thun Murex",
 };
 
 // Runs before first paint so a saved Light/Dark choice doesn't flash the

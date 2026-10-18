@@ -8,13 +8,12 @@
   gap: 10px;
 }
 
+/* The Thun Murex mark (an SVG in the text color: black on light, white on dark). */
 .brandMark {
   width: 28px;
   height: 28px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #6366f1, #a855f7);
   flex-shrink: 0;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+  color: var(--text);
 }
 
 .brandText {

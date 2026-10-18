@@ -33,7 +33,7 @@ export async function isProviderPaused(provider: string): Promise<boolean> {
 }
 
 export function pausedMessage(provider: string): string {
-  return `Provider "${provider}" is paused. Resume it on the Manage page of the ai-thun console.`;
+  return `Provider "${provider}" is paused. Resume it on the Manage page of the Thun Murex console.`;
 }
 
 // Writes are chained so two quick toggles can't interleave their

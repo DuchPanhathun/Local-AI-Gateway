@@ -2,13 +2,14 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { defaultModel } from "@/lib/ai-providers";
+import { Logo } from "../logo";
 import { CodeBlock, CodeTabs, DocsNav, ThemeToggle, type NavGroup } from "./docs-client";
 import styles from "./docs.module.css";
 
 export const metadata: Metadata = {
-  title: "Docs · ai-thun",
+  title: "Docs", // "Docs · Thun Murex", from the layout's title template
   description:
-    "How to call the ai-thun gateway: endpoints, request and response formats, streaming and errors.",
+    "How to call the Thun Murex gateway: endpoints, request and response formats, streaming and errors.",
 };
 
 const NAV: NavGroup[] = [
@@ -406,7 +407,7 @@ curl "$AI_THUN_URL/api/chat" \\
     "workdir": "/home/thun/Desktop/documents/Project/ai-thun"
   }'`;
 
-const ERROR_BODY = `{ "error": "Provider \\"cerebras\\" is paused. Resume it on the Manage page of the ai-thun console." }`;
+const ERROR_BODY = `{ "error": "Provider \\"cerebras\\" is paused. Resume it on the Manage page of the Thun Murex console." }`;
 
 // ---------------------------------------------------------------------------
 // Building blocks
@@ -522,8 +523,8 @@ export default function DocumentsPage() {
     <div className={styles.page}>
       <header className={styles.topbar}>
         <Link href="/documents" className={styles.brand}>
-          <span className={styles.brandMark} />
-          ai-thun
+          <Logo className={styles.brandMark} />
+          Thun Murex
           <span className={styles.brandTag}>Docs</span>
         </Link>
         <div className={styles.topActions}>
@@ -557,7 +558,7 @@ export default function DocumentsPage() {
           </details>
 
           <div className={styles.eyebrow}>Documentation</div>
-          <h1 className={styles.title}>ai-thun API</h1>
+          <h1 className={styles.title}>Thun Murex API</h1>
           <p className={styles.lead}>
             One endpoint for three cloud AI providers and four AI coding tools running on this
             machine. Send the same JSON to any of them, and every answer comes back in the same
@@ -568,7 +569,7 @@ export default function DocumentsPage() {
 
           <Section id="overview" title="Overview">
             <p>
-              ai-thun is a gateway running on <code>thun-latitude-7280</code>. Apps send it one
+              Thun Murex is a gateway running on <code>thun-latitude-7280</code>. Apps send it one
               kind of request, and it answers from any of seven providers: three cloud APIs, and
               four coding CLIs (command-line AI tools) running on the machine itself.
             </p>
@@ -967,7 +968,7 @@ export default function DocumentsPage() {
           </Section>
 
           <footer className={styles.footer}>
-            <span>ai-thun · self-hosted on thun-latitude-7280</span>
+            <span>Thun Murex · self-hosted on thun-latitude-7280</span>
             <Link href="/">Back to the console</Link>
           </footer>
         </main>

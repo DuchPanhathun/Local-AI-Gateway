@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import Link from "next/link";
+import { Logo } from "./logo";
 import styles from "./page.module.css";
 import { getThemePref, setThemePref, subscribeTheme, type ThemePref } from "./theme";
 
@@ -1038,9 +1039,9 @@ export default function Dashboard() {
       <main className={styles.loginWrap}>
         <div className={styles.loginCard}>
           <div className={styles.brand}>
-            <span className={styles.brandMark} />
+            <Logo className={styles.brandMark} />
             <span className={styles.brandText}>
-              <span className={styles.brandName}>ai-thun</span>
+              <span className={styles.brandName}>Thun Murex</span>
               <span className={styles.brandSub}>AI gateway console</span>
             </span>
           </div>
@@ -2597,9 +2598,9 @@ export default function Dashboard() {
     <div className={styles.appShell}>
       <aside className={styles.sidebar}>
         <div className={`${styles.brand} ${styles.sidebarBrand}`}>
-          <span className={styles.brandMark} />
+          <Logo className={styles.brandMark} />
           <span className={styles.brandText}>
-            <span className={styles.brandName}>ai-thun</span>
+            <span className={styles.brandName}>Thun Murex</span>
             <span className={styles.brandSub}>AI gateway</span>
           </span>
         </div>
