@@ -10,6 +10,7 @@ import {
   relayStream,
 } from "@/lib/local-agent";
 import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
+import { bodyRetryAfter, RateLimitedError, retryAfterHeaders } from "@/lib/rate-limits";
 
 export const maxDuration = 300;
 
@@ -116,7 +117,8 @@ export async function POST(req: NextRequest) {
         // Failures before the stream opens (401/400/403/429) are ordinary JSON errors.
         recordLocalRun(providerId, model, { status: "error" });
         const data = await upstream.json().catch(() => ({ error: "Upstream request failed" }));
-        return NextResponse.json(data, { status: upstream.status, headers: CORS_HEADERS });
+        const headers = { ...CORS_HEADERS, ...retryAfterHeaders(bodyRetryAfter(data)) };
+        return NextResponse.json(data, { status: upstream.status, headers });
       }
 
       const stream = relayStream(upstream.body, req.signal, (outcome) =>
@@ -177,6 +179,12 @@ export async function POST(req: NextRequest) {
     }
     return new NextResponse(result.stream, { headers: SSE_HEADERS });
   } catch (err) {
+    if (err instanceof RateLimitedError) {
+      return NextResponse.json(
+        { error: err.message, ...(err.retryAfter !== undefined ? { retry_after: err.retryAfter } : {}) },
+        { status: 429, headers: { ...CORS_HEADERS, ...retryAfterHeaders(err.retryAfter) } }
+      );
+    }
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Upstream request failed" },
       { status: 502, headers: CORS_HEADERS }

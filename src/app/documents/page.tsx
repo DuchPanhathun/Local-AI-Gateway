@@ -43,6 +43,7 @@ const NAV: NavGroup[] = [
       { id: "cloud-providers", label: "Cloud providers" },
       { id: "local-clis", label: "Local agent CLIs" },
       { id: "errors", label: "Errors" },
+      { id: "vscode", label: "VS Code & phone" },
     ],
   },
 ];
@@ -409,6 +410,14 @@ curl "$AI_THUN_URL/api/chat" \\
 
 const ERROR_BODY = `{ "error": "Provider \\"cerebras\\" is paused. Resume it on the Manage page of the Thun Murex console." }`;
 
+const LIMIT_BODY = `HTTP/1.1 429 Too Many Requests
+Retry-After: 7140
+
+{
+  "detail": "claude exited with status 1: You've hit your limit · resets 3pm (Asia/Bangkok)",
+  "retry_after": 7140
+}`;
+
 // ---------------------------------------------------------------------------
 // Building blocks
 // ---------------------------------------------------------------------------
@@ -698,7 +707,7 @@ export default function DocumentsPage() {
                 [<code key="e">thinking</code>, <code key="d">{`{"text"}`}</code>, "Reasoning, as it’s generated. Only from cloud models that think before answering (SEA-LION, gpt-oss)."],
                 [<code key="e">delta</code>, <code key="d">{`{"text"}`}</code>, "The next piece of the answer."],
                 [<code key="e">done</code>, <code key="d">{`{"provider", "model", "result", "finish_reason", "usage", "duration_ms"}`}</code>, <>The whole answer is in <code>result</code>. Local CLIs add <code>session_id</code> and leave out <code>finish_reason</code>. Always the last event.</>],
-                [<code key="e">error</code>, <code key="d">{`{"status", "detail"}`}</code>, "The request failed after the stream started. Always the last event."],
+                [<code key="e">error</code>, <code key="d">{`{"status", "detail", …}`}</code>, <>The request failed after the stream started, with the same fields as an <a href="#errors">error response</a>. Always the last event.</>],
               ]}
             />
             <CodeBlock code={STREAM_OUTPUT} label="What the stream looks like" />
@@ -896,14 +905,15 @@ export default function DocumentsPage() {
               Each cloud provider has several API keys. Requests take turns across all of them, so
               together they handle many more requests than one key could. A key that answers{" "}
               <code>429</code> (rate limited) is skipped for the next one; if every key is, the
-              request fails with <code>502</code>.
+              request fails with <code>429</code>, and its <code>Retry-After</code> header says how
+              many seconds until the first key can be used again, when the provider said.
             </p>
             <Table
               head={["Provider", "Limits", "Good to know"]}
               rows={[
                 ["SEA-LION", "10 requests a minute per key", <>Thinks before answering, shown as <code>thinking</code> events. Turn it off with <code>{`"chat_template_kwargs": {"enable_thinking": false}`}</code>.</>],
                 ["Cerebras", "Different for each model", "Very fast. The account needs billing set up, or it answers 402."],
-                ["Groq", "500,000 tokens a day per key and model (our own limit)", <>When a key reaches it, the next key is used until the UTC day ends. <code>gpt-oss</code> models send <code>thinking</code> events.</>],
+                ["Groq", "500,000 tokens a day per key and model (our own limit)", <>When a key reaches it, the next key is used until the UTC day ends; when every key has, requests get <code>429</code> until then. <code>gpt-oss</code> models send <code>thinking</code> events.</>],
               ]}
             />
           </Section>
@@ -933,6 +943,18 @@ export default function DocumentsPage() {
                 A request that takes longer than 5 minutes is stopped, with <code>504</code>.
               </li>
               <li>
+                When a CLI reaches its plan’s usage limit (Claude Code’s 5-hour or weekly limit,
+                Codex’s, Gemini’s or Antigravity’s quota), the answer is <code>429</code>, with{" "}
+                <code>retry_after</code> when the CLI said when the limit resets.
+              </li>
+              <li>
+                Antigravity stops if it needs a permission nobody can grant while it runs on its
+                own, such as running a command. The answer is <code>502</code>, with the
+                permissions in <code>denied</code> and the conversation in{" "}
+                <code>session_id</code>: allow them in agy’s <code>settings.json</code>, then send
+                that <code>session_id</code> to carry on.
+              </li>
+              <li>
                 Token counts are for that request alone, even in a long session, and input
                 includes cached tokens, which are most of a Claude Code request.
               </li>
@@ -955,16 +977,55 @@ export default function DocumentsPage() {
                 [<code key="c">402</code>, "The cloud provider wants payment (passed on from the provider)."],
                 [<code key="c">403</code>, <><code>workdir</code> is outside the folders the gateway allows.</>],
                 [<code key="c">404</code>, "No access token with that id."],
-                [<code key="c">429</code>, "Too many requests: a CLI already has 2 running, or every Groq key is at its transcription limit."],
-                [<code key="c">502</code>, "The provider failed: it couldn’t be reached, every key was rate limited, or the CLI failed or isn’t signed in."],
+                [<code key="c">429</code>, <>Too many requests: every key of a cloud provider is rate limited or at its daily limit, a CLI reached its plan’s usage limit, a CLI already has 2 running, or every Groq key is at its transcription limit. <code>Retry-After</code> says how many seconds to wait, when that’s known.</>],
+                [<code key="c">502</code>, "The provider failed: it couldn’t be reached, or the CLI failed or isn’t signed in."],
                 [<code key="c">503</code>, <>The provider is paused. See <a href="#providers">Pause &amp; resume</a>.</>],
                 [<code key="c">504</code>, "A CLI took longer than 5 minutes."],
               ]}
             />
+            <p>Some errors carry more fields, so a program can recover on its own:</p>
+            <Fields
+              rows={[
+                ["retry_after", "number", <>With <code>429</code>: seconds until the limit resets, the same as the <code>Retry-After</code> header. Only there when the provider or CLI said.</>],
+                ["denied", "array", <>Antigravity: the permissions it needed and couldn’t get, e.g. <code>{`["command"]`}</code>.</>],
+                ["session_id", "string", <>Antigravity, with <code>denied</code>: the conversation to carry on once the permissions are allowed.</>],
+                ["partial_response", "string", "A CLI’s text from before it stopped."],
+                ["stderr", "string", "The end of a CLI’s error output, with secrets hidden."],
+              ]}
+            />
+            <CodeBlock code={LIMIT_BODY} label="Example: a CLI at its usage limit" />
             <Note>
-              During a stream, a failure arrives as an <code>error</code> event instead, and the
-              HTTP status stays <code>200</code>.
+              During a stream, a failure arrives as an <code>error</code> event instead, with the
+              same fields and the status in <code>status</code>; the HTTP status stays{" "}
+              <code>200</code>.
             </Note>
+          </Section>
+
+          <Section id="vscode" title="VS Code & phone">
+            <p>
+              The <strong>Thun Murex</strong> extension for VS Code (
+              <code>duchpanhathun.ai-thun</code>) is a chat panel for this gateway: every provider
+              and model, CLI sessions that carry on, teams of models that split up a task, approval
+              of the CLI’s actions, and scheduled tasks and workflows.
+            </p>
+            <ul>
+              <li>
+                Set the gateway’s address in the <code>aiThun.baseUrl</code> setting, and the key
+                with the command <strong>Thun Murex: Set API Key</strong>. VS Code keeps the key
+                in its secret storage.
+              </li>
+              <li>
+                It uses the error fields above: a team stopped by a usage limit carries on by
+                itself once <code>retry_after</code> has passed, and an Antigravity run stopped
+                for a permission picks up the same <code>session_id</code>.
+              </li>
+              <li>
+                <strong>Phone app</strong>: run <strong>Thun Murex: Connect a Phone</strong> and
+                scan the code. From the phone you can chat, approve the agent’s actions from a
+                notification, change models, and run schedules and workflows. The phone only talks
+                to VS Code, over Tailscale; VS Code sends the requests here with its own key.
+              </li>
+            </ul>
           </Section>
 
           <footer className={styles.footer}>

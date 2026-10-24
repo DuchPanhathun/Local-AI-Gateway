@@ -1,3 +1,4 @@
+import { KeyLimits, retryAfterSeconds } from "./rate-limits";
 import {
   getKeyDayTokens,
   getKeyDayUsage,
@@ -174,6 +175,7 @@ export async function callProvider(
   const startedAt = Date.now();
   let cursor = cursors.get(providerId) ?? 0;
   let lastError: unknown;
+  const limits = new KeyLimits(providerId, keys.length);
 
   for (let attempt = 0; attempt < keys.length; attempt++) {
     const { name, key } = keys[cursor % keys.length];
@@ -186,6 +188,7 @@ export async function callProvider(
       lastError = new Error(
         `${providerId} key hit its daily token limit (${config.dailyTokenLimitPerKey})`
       );
+      limits.pastDailyLimit();
       continue;
     }
 
@@ -206,6 +209,7 @@ export async function callProvider(
 
     if (res.status === 429) {
       lastError = new Error(`${providerId} key hit its rate limit (429)`);
+      limits.rateLimited(retryAfterSeconds(res.headers));
       continue;
     }
 
@@ -222,9 +226,13 @@ export async function callProvider(
   }
 
   cursors.set(providerId, cursor);
-  throw lastError instanceof Error
-    ? lastError
-    : new Error(`All ${providerId} API keys are unavailable right now.`);
+  // Every key over its limit: a RateLimitedError, which says when to retry.
+  throw (
+    limits.error() ??
+    (lastError instanceof Error
+      ? lastError
+      : new Error(`All ${providerId} API keys are unavailable right now.`))
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -505,6 +513,7 @@ export async function streamProvider(
   const startedAt = Date.now();
   let cursor = cursors.get(providerId) ?? 0;
   let lastError: unknown;
+  const limits = new KeyLimits(providerId, keys.length);
 
   for (let attempt = 0; attempt < keys.length; attempt++) {
     const { name, key } = keys[cursor % keys.length];
@@ -517,6 +526,7 @@ export async function streamProvider(
       lastError = new Error(
         `${providerId} key hit its daily token limit (${config.dailyTokenLimitPerKey})`
       );
+      limits.pastDailyLimit();
       continue;
     }
 
@@ -546,6 +556,7 @@ export async function streamProvider(
     if (res.status === 429) {
       void res.body?.cancel();
       lastError = new Error(`${providerId} key hit its rate limit (429)`);
+      limits.rateLimited(retryAfterSeconds(res.headers));
       continue;
     }
 
@@ -564,9 +575,13 @@ export async function streamProvider(
   }
 
   cursors.set(providerId, cursor);
-  throw lastError instanceof Error
-    ? lastError
-    : new Error(`All ${providerId} API keys are unavailable right now.`);
+  // Every key over its limit: a RateLimitedError, which says when to retry.
+  throw (
+    limits.error() ??
+    (lastError instanceof Error
+      ? lastError
+      : new Error(`All ${providerId} API keys are unavailable right now.`))
+  );
 }
 
 export type KeyUsageSnapshot = {

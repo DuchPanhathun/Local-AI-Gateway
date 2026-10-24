@@ -11,6 +11,7 @@ import {
   type GatewayUsage,
 } from "@/lib/local-agent";
 import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
+import { bodyRetryAfter, RateLimitedError, retryAfterHeaders } from "@/lib/rate-limits";
 
 // With Fluid Compute (enabled on this project) the Hobby plan allows up to
 // 300s per invocation, not the pre-Fluid 60s cap — reasoning models like
@@ -113,7 +114,9 @@ export async function POST(req: NextRequest) {
           : { status: "error" }
       );
       const body = ok ? normalizeAskResponse(data) : data;
-      return NextResponse.json(body, { status, headers: CORS_HEADERS });
+      // A CLI's usage limit is a 429 whose body says when it resets.
+      const headers = { ...CORS_HEADERS, ...retryAfterHeaders(ok ? undefined : bodyRetryAfter(data)) };
+      return NextResponse.json(body, { status, headers });
     } catch (err) {
       recordLocalRun(providerId, model, { status: "error" });
       return NextResponse.json(
@@ -159,6 +162,12 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json(data, { status, headers: CORS_HEADERS });
   } catch (err) {
+    if (err instanceof RateLimitedError) {
+      return NextResponse.json(
+        { error: err.message, ...(err.retryAfter !== undefined ? { retry_after: err.retryAfter } : {}) },
+        { status: 429, headers: { ...CORS_HEADERS, ...retryAfterHeaders(err.retryAfter) } }
+      );
+    }
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Upstream request failed" },
       { status: 502, headers: CORS_HEADERS }
