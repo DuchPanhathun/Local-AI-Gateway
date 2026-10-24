@@ -98,6 +98,25 @@ type LocalAgentHealth = {
   providers: Record<string, LocalAgentProviderHealth>;
 };
 
+// One of a local CLI's subscription limits, from /api/local-agent/limits.
+type PlanLimit = {
+  id: string;
+  window: string; // "5h", "weekly", as the CLI names it
+  remaining_fraction: number; // 0-1
+  resets_at: string | null;
+  name: string | null;
+  group: string | null; // set when separate model families have separate limits
+  models: string | null;
+};
+
+type ProviderPlanLimits = {
+  installed: boolean;
+  supported: boolean; // the CLI can report its limits
+  limits: PlanLimit[];
+  checked_at: string | null;
+  error: string | null;
+};
+
 const CLOUD_PROVIDERS = ["sea-lion", "cerebras", "groq"] as const;
 const LOCAL_PROVIDERS = ["claude", "codex", "gemini", "antigravity"] as const;
 type ChatProvider =
@@ -422,6 +441,67 @@ function ProgressBar({ used, limit }: { used: number; limit?: number }) {
   );
 }
 
+// How much of a plan limit is left. Rounded the way the CLIs show it.
+function RemainingBar({ fraction }: { fraction: number }) {
+  const pct = Math.max(0, Math.min(100, fraction * 100));
+  const color =
+    pct <= 10
+      ? "var(--danger)"
+      : pct <= 30
+        ? "var(--warning)"
+        : "var(--success)";
+  return (
+    <div>
+      <div className={styles.progressLabel}>{Math.round(pct)}% left</div>
+      <div className={styles.progressTrack}>
+        <div
+          className={styles.progressFill}
+          style={{ width: `${pct}%`, background: color }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// "Claude Code, Codex and Gemini CLI".
+function listLabels(providers: readonly ChatProvider[]): string {
+  const names = providers.map((p) => PROVIDER_LABELS[p]);
+  return names.length > 1
+    ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
+    : (names[0] ?? "");
+}
+
+// "5h" → "5-hour", "weekly" → "Weekly".
+function windowLabel(window: string): string {
+  const hours = /^(\d+)h$/.exec(window);
+  if (hours) return `${hours[1]}-hour`;
+  return window.charAt(0).toUpperCase() + window.slice(1);
+}
+
+// "3h 45m", "6d 23h", "12m".
+function formatWait(ms: number): string {
+  const minutes = Math.max(1, Math.round(ms / 60_000));
+  const d = Math.floor(minutes / 1440);
+  const h = Math.floor((minutes % 1440) / 60);
+  const m = minutes % 60;
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+}
+
+// When a limit is fully available again, in this browser's time zone:
+// "9:08 PM (in 3h 45m)", with the date when it isn't today.
+function resetLabel(iso: string | null, now: number): string {
+  if (!iso) return "—";
+  const at = new Date(iso);
+  const today = at.toDateString() === new Date(now).toDateString();
+  const when = at.toLocaleString("en", {
+    ...(today ? {} : { month: "short", day: "numeric" }),
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const wait = at.getTime() - now;
+  return wait > 0 ? `${when} (in ${formatWait(wait)})` : `${when} (now)`;
+}
+
 const compactFormat = new Intl.NumberFormat("en", {
   notation: "compact",
   maximumFractionDigits: 1,
@@ -646,6 +726,13 @@ export default function Dashboard() {
   );
   const [localAgent, setLocalAgent] = useState<LocalAgentHealth | null>(null);
   const [localAgentError, setLocalAgentError] = useState<string | null>(null);
+  const [planLimits, setPlanLimits] = useState<Record<
+    string,
+    ProviderPlanLimits
+  > | null>(null);
+  const [planLimitsError, setPlanLimitsError] = useState<string | null>(null);
+  // When they were last loaded: the countdowns to each reset are from then.
+  const [limitsNow, setLimitsNow] = useState(0);
   const [models, setModels] = useState<Record<string, ProviderModels> | null>(
     null,
   );
@@ -725,6 +812,25 @@ export default function Dashboard() {
     }
   }, []);
 
+  // The gateway asks the CLIs at most every 2 minutes, however often this runs.
+  const loadPlanLimits = useCallback(async () => {
+    try {
+      const res = await fetch("/api/local-agent/limits");
+      const data = await res.json();
+      setLimitsNow(Date.now());
+      if (!res.ok) {
+        setPlanLimitsError(
+          data.error || `Couldn't read the plan limits (HTTP ${res.status})`,
+        );
+        return;
+      }
+      setPlanLimits(data.providers);
+      setPlanLimitsError(null);
+    } catch {
+      setPlanLimitsError("Network error reaching local-agent-gateway");
+    }
+  }, []);
+
   // Model lists change rarely (the server caches them for 10 minutes), so
   // they're fetched once per sign-in rather than on every refresh tick.
   const loadModels = useCallback(async () => {
@@ -747,6 +853,7 @@ export default function Dashboard() {
         await load();
         await loadTokens();
         await loadLocalAgent();
+        await loadPlanLimits();
       }
     }
 
@@ -756,7 +863,7 @@ export default function Dashboard() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [signedIn, load, loadTokens, loadLocalAgent]);
+  }, [signedIn, load, loadTokens, loadLocalAgent, loadPlanLimits]);
 
   useEffect(() => {
     if (!signedIn) return;
@@ -1005,6 +1112,8 @@ export default function Dashboard() {
     setPauseError(null);
     setTokens(null);
     setLocalAgent(null);
+    setPlanLimits(null);
+    setPlanLimitsError(null);
     setModels(null);
     handleClearChat();
   }
@@ -1137,6 +1246,29 @@ export default function Dashboard() {
   // unknown number, not zero.
   function localTokens(u: ReturnType<typeof localUsageFor>): string {
     return u.requests > 0 && !u.tokensReported ? "—" : formatCount(u.tokens);
+  }
+
+  // Plan limits, for the CLIs that report them.
+  const now = limitsNow;
+  const limitProviders = LOCAL_PROVIDERS.filter(
+    (p) => planLimits?.[p]?.installed && planLimits[p].supported,
+  );
+  const silentProviders = LOCAL_PROVIDERS.filter(
+    (p) => planLimits?.[p]?.installed && !planLimits[p].supported,
+  );
+  const limitsCheckedAt = limitProviders
+    .map((p) => planLimits?.[p]?.checked_at)
+    .filter((t): t is string => !!t)
+    .sort()[0];
+
+  // The limit closest to running out, for a provider card.
+  function tightestLimit(provider: string): PlanLimit | null {
+    const list = planLimits?.[provider]?.limits ?? [];
+    return list.reduce<PlanLimit | null>(
+      (low, l) =>
+        !low || l.remaining_fraction < low.remaining_fraction ? l : low,
+      null,
+    );
   }
 
   const isPaused = (p: string) => paused.includes(p);
@@ -1505,6 +1637,7 @@ export default function Dashboard() {
           const m = models?.[p];
           const lu = localUsageFor(p);
           const off = isPaused(p);
+          const tight = tightestLimit(p);
           const status = off
             ? { label: "Paused", cls: styles.badgeWarning }
             : localAgentError
@@ -1560,6 +1693,17 @@ export default function Dashboard() {
                   ? "Paused: requests are turned away until you resume it."
                   : (localAgentError ??
                     (h?.version ? `Version ${h.version}` : "Version unknown"))}
+                {tight && (
+                  <span
+                    className={styles.providerLimit}
+                    title={tight.models ?? undefined}
+                  >
+                    {tight.group ? `${tight.group}: ` : ""}
+                    {Math.round(tight.remaining_fraction * 100)}% of the{" "}
+                    {windowLabel(tight.window).toLowerCase()} limit left,
+                    resets {resetLabel(tight.resets_at, now)}
+                  </span>
+                )}
               </div>
               {off ? (
                 <button
@@ -2238,6 +2382,90 @@ export default function Dashboard() {
           );
         })}
       </div>
+
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <span className={styles.sectionTitle}>Plan limits</span>
+          {limitsCheckedAt && (
+            <span className={styles.badge}>
+              Checked {new Date(limitsCheckedAt).toLocaleTimeString()}
+            </span>
+          )}
+        </div>
+        <p className={styles.sectionDesc}>
+          How much of each subscription&apos;s usage limits is left, as the CLI
+          itself reports it. Checking uses none of it. The limits belong to the
+          account, so use outside Thun Murex counts too. They refill in 5-hour
+          and weekly windows, not daily.
+          {silentProviders.length > 0 &&
+            ` ${listLabels(silentProviders)} ${
+              silentProviders.length === 1 ? "doesn't" : "don't"
+            } report ${silentProviders.length === 1 ? "its" : "their"} limits.`}
+        </p>
+        {planLimitsError && (
+          <div className={styles.alert} style={{ marginBottom: 16 }}>
+            {planLimitsError}
+          </div>
+        )}
+        <div className={styles.tableWrap}>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>CLI</th>
+                <th>Models</th>
+                <th>Window</th>
+                <th>Remaining</th>
+                <th>Resets</th>
+              </tr>
+            </thead>
+            <tbody>
+              {limitProviders.flatMap((p) => {
+                const report = planLimits?.[p];
+                if (!report?.limits.length) {
+                  return [
+                    <tr key={p} className={styles.idleRow}>
+                      <td>{PROVIDER_LABELS[p]}</td>
+                      <td colSpan={4}>
+                        {report?.error
+                          ? asSentence(report.error)
+                          : "Not checked yet."}
+                      </td>
+                    </tr>,
+                  ];
+                }
+                return report.limits.map((l) => (
+                  <tr key={`${p}:${l.id}`}>
+                    <td>{PROVIDER_LABELS[p]}</td>
+                    <td style={{ minWidth: 180 }}>
+                      {l.group ?? "All models"}
+                      {l.models && (
+                        <div className={styles.dim}>{l.models}</div>
+                      )}
+                    </td>
+                    <td>{windowLabel(l.window)}</td>
+                    <td style={{ minWidth: 140 }}>
+                      <RemainingBar fraction={l.remaining_fraction} />
+                    </td>
+                    <td className={styles.dim}>
+                      {resetLabel(l.resets_at, now)}
+                    </td>
+                  </tr>
+                ));
+              })}
+              {planLimits !== null && limitProviders.length === 0 && (
+                <tr className={styles.idleRow}>
+                  <td colSpan={5}>No installed CLI reports its limits.</td>
+                </tr>
+              )}
+              {planLimits === null && !planLimitsError && (
+                <tr className={styles.idleRow}>
+                  <td colSpan={5}>Checking…</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       <section className={styles.section}>
         <div className={styles.sectionHeader}>

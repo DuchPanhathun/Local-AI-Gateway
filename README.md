@@ -194,6 +194,11 @@ CLI install/login status (not usage): `GET /api/local-agent/health` (owner-only)
 the dashboard. A CLI showing `installed: true` still needs its own interactive login — SSH into
 the host and run `claude` / `codex login` / `gemini` / `agy` once each.
 
+Plan limits: `GET /api/local-agent/limits` (owner-only) relays the gateway's `GET /limits`: per
+CLI, how much of each subscription limit is left (`remaining_fraction`) and when it resets
+(`resets_at`), from the CLIs that can say (Antigravity, via `agy -p /quota`, which uses none of
+it). Shown under Analytics → Plan limits and on the dashboard's CLI cards. Cached 2 minutes.
+
 ## How key rotation works
 
 `src/lib/ai-providers.ts` round-robins every request across whichever `<PROVIDER>_API_KEY*` vars

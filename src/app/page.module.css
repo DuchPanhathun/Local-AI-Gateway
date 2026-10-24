@@ -693,6 +693,12 @@
   min-height: 2.2em;
 }
 
+.providerLimit {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+}
+
 .linkButton {
   display: inline-flex;
   align-items: center;

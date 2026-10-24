@@ -104,6 +104,13 @@ export async function models(): Promise<GatewayCallResult> {
   return { status: res.status, data: await res.json() };
 }
 
+// How much of each CLI's subscription limits is left and when they reset,
+// from the CLIs that can say (Antigravity). Checking uses none of it.
+export async function limits(): Promise<GatewayCallResult> {
+  const res = await fetch(`${baseUrl()}/limits`, { headers: authHeaders() });
+  return { status: res.status, data: await res.json() };
+}
+
 // Tokens one run used, as local-agent-gateway reports them. Only Claude Code
 // and Antigravity report usage; Codex and Gemini runs come back with null.
 export type GatewayUsage = {

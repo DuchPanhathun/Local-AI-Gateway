@@ -34,6 +34,7 @@ const NAV: NavGroup[] = [
       { id: "providers", label: "Pause & resume" },
       { id: "tokens", label: "Access tokens" },
       { id: "health", label: "CLI health" },
+      { id: "limits", label: "CLI plan limits" },
     ],
   },
   {
@@ -373,6 +374,31 @@ const HEALTH_RESPONSE = `{
   }
 }`;
 
+const LIMITS_RESPONSE = `{
+  "providers": {
+    "antigravity": {
+      "installed": true,
+      "supported": true,
+      "checked_at": "2026-10-24T10:24:36Z",
+      "error": null,
+      "limits": [
+        {
+          "id": "gemini-5h",
+          "window": "5h",
+          "remaining_fraction": 0.92,
+          "resets_at": "2026-10-24T14:08:32Z",
+          "name": "Five Hour Limit Remaining",
+          "group": "Gemini Models",
+          "models": "Gemini Flash, Gemini Pro"
+        },
+        …
+      ]
+    },
+    "claude": { "installed": true, "supported": false, "limits": [], … },
+    …
+  }
+}`;
+
 const CLOUD_CONVERSATION = `curl "$AI_THUN_URL/api/chat" \\
   -H "Authorization: Bearer $AI_THUN_KEY" \\
   -H "Content-Type: application/json" \\
@@ -631,7 +657,7 @@ export default function DocumentsPage() {
                 [<code key="e">GET /api/usage, /api/quotas</code>, <Yes key="o" />, <No key="t" />],
                 [<code key="e">GET, PATCH /api/providers</code>, <Yes key="o" />, <No key="t" />],
                 [<code key="e">GET, POST, DELETE /api/tokens</code>, <Yes key="o" />, <No key="t" />],
-                [<code key="e">GET /api/local-agent/health</code>, <Yes key="o" />, <No key="t" />],
+                [<code key="e">GET /api/local-agent/health, /api/local-agent/limits</code>, <Yes key="o" />, <No key="t" />],
               ]}
             />
             <p>
@@ -897,6 +923,21 @@ export default function DocumentsPage() {
               machine.
             </p>
             <CodeBlock code={HEALTH_RESPONSE} label="Response (shortened)" />
+          </Section>
+
+          <Section id="limits" title="CLI plan limits">
+            <Endpoint method="GET" path="/api/local-agent/limits" owner />
+            <p>
+              How much of each CLI subscription’s usage limits is left, and when each one is
+              fully available again, as the CLI itself reports it. Checking uses none of it. Only
+              CLIs that can say are filled in (Antigravity); the others have{" "}
+              <code>supported: false</code>. The limits belong to the account, so use outside Thun
+              Murex counts too. They refill in rolling windows (<code>5h</code>,{" "}
+              <code>weekly</code>), not daily, and Antigravity keeps separate limits for its
+              Gemini models and for its Claude and GPT models. The answer is cached for 2
+              minutes; a signed-out CLI comes back with <code>error</code> set.
+            </p>
+            <CodeBlock code={LIMITS_RESPONSE} label="Response (shortened)" />
           </Section>
 
           {/* ------------------------------------------------------------ */}
