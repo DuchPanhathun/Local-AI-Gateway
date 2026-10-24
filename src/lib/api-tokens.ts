@@ -1,4 +1,4 @@
-import { randomBytes } from "crypto";
+import { createHash, randomBytes, timingSafeEqual } from "crypto";
 
 // Dynamically-generated API tokens, stored in Vercel Edge Config so every
 // serverless instance sees the same list without needing to redeploy.
@@ -87,9 +87,11 @@ export function maskToken(token: string): string {
 // unreachable or unconfigured, generated tokens just don't work (the owner's
 // APP_API_KEY still does), rather than taking the whole endpoint down.
 export async function isValidGeneratedToken(bearer: string): Promise<boolean> {
+  const digest = (s: string) => createHash("sha256").update(s).digest();
   try {
     const tokens = await readTokens();
-    return tokens.some((t) => t.token === bearer);
+    const wanted = digest(bearer);
+    return tokens.some((t) => timingSafeEqual(digest(t.token), wanted)); // no early exit on a near match
   } catch {
     return false;
   }

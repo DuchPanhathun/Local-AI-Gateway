@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getUsageSnapshot } from "@/lib/ai-providers";
 import { getLocalUsageSnapshot } from "@/lib/local-agent";
 import { getPausedProviders } from "@/lib/provider-state";
+import { checkAccess, refusal } from "@/lib/auth";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": process.env.ALLOWED_ORIGIN || "*",
@@ -17,13 +18,8 @@ export function OPTIONS() {
 // not), `local` per local CLI and model (only those used today), plus which
 // providers are paused.
 export async function GET(req: NextRequest) {
-  const appKey = process.env.APP_API_KEY;
-  if (appKey) {
-    const auth = req.headers.get("authorization");
-    if (auth !== `Bearer ${appKey}`) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: CORS_HEADERS });
-    }
-  }
+  const access = await checkAccess(req, "owner");
+  if (!access.ok) return refusal(access, CORS_HEADERS);
 
   return NextResponse.json(
     {

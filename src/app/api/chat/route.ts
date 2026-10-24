@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callProvider, isProviderId, PROVIDER_IDS } from "@/lib/ai-providers";
-import { isValidGeneratedToken } from "@/lib/api-tokens";
 import {
   ask as askLocalAgent,
   isLocalAgentProviderId,
@@ -12,6 +11,7 @@ import {
 } from "@/lib/local-agent";
 import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
 import { bodyRetryAfter, RateLimitedError, retryAfterHeaders } from "@/lib/rate-limits";
+import { checkAccess, refusal } from "@/lib/auth";
 
 // With Fluid Compute (enabled on this project) the Hobby plan allows up to
 // 300s per invocation, not the pre-Fluid 60s cap — reasoning models like
@@ -25,10 +25,6 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
-
-function unauthorized() {
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: CORS_HEADERS });
-}
 
 export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
@@ -54,16 +50,8 @@ type ChatRequestBody = {
 const DEFAULT_PROVIDER = "sea-lion";
 
 export async function POST(req: NextRequest) {
-  const appKey = process.env.APP_API_KEY;
-  if (appKey) {
-    const auth = req.headers.get("authorization");
-    const bearer = auth?.startsWith("Bearer ") ? auth.slice(7) : undefined;
-    const isOwner = bearer === appKey;
-    const isGeneratedToken = !isOwner && !!bearer && (await isValidGeneratedToken(bearer));
-    if (!isOwner && !isGeneratedToken) {
-      return unauthorized();
-    }
-  }
+  const access = await checkAccess(req, "app");
+  if (!access.ok) return refusal(access, CORS_HEADERS);
 
   let payload: ChatRequestBody;
   try {

@@ -158,7 +158,6 @@ type View = "dashboard" | "playground" | "api-keys" | "analytics" | "manage";
 // Constants
 // ---------------------------------------------------------------------------
 
-const STORAGE_KEY = "ai-thun-dashboard-app-key";
 const REFRESH_MS = 15_000;
 
 const NAV_ITEMS: {
@@ -488,7 +487,6 @@ function finishNote(m: ChatMessage): string | null {
 // arrives, rather than waiting for the whole response. Every provider uses
 // the same events; only cloud models send `thinking`.
 async function streamChat(
-  appKey: string,
   body: Record<string, unknown>,
   signal: AbortSignal,
   handlers: {
@@ -503,10 +501,7 @@ async function streamChat(
   try {
     res = await fetch("/api/chat/stream", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${appKey}`,
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
       signal,
     });
@@ -575,33 +570,35 @@ async function streamChat(
   if (!ended) handlers.onError("The stream ended without a response");
 }
 
-// The sign-in key lives in sessionStorage, which the server can't see. Reading
-// it through useSyncExternalStore lets hydration use the server's value
-// (undefined → a blank shell) before switching to the real one, instead of
-// the server rendering the sign-in screen and the browser the signed-in app.
+// Signed in or not: the server knows, from its sign-in cookie, which the page's
+// scripts can't read (so the page never holds the key). undefined until the
+// server has been asked: hydration then renders the same blank shell as the
+// server did, instead of the sign-in screen flashing up.
 const SESSION_EVENT = "ai-thun-session-change";
+let signedInNow: boolean | undefined;
 
 function subscribeSession(callback: () => void) {
   window.addEventListener(SESSION_EVENT, callback);
   return () => window.removeEventListener(SESSION_EVENT, callback);
 }
 
-function getSessionKey(): string | null {
-  try {
-    return sessionStorage.getItem(STORAGE_KEY);
-  } catch {
-    return null;
-  }
+function getSignedIn(): boolean | undefined {
+  return signedInNow;
 }
 
-function setSessionKey(key: string | null) {
-  try {
-    if (key) sessionStorage.setItem(STORAGE_KEY, key);
-    else sessionStorage.removeItem(STORAGE_KEY);
-  } catch {
-    // storage blocked — the key just won't survive a reload
-  }
+function setSignedIn(value: boolean) {
+  signedInNow = value;
   window.dispatchEvent(new Event(SESSION_EVENT));
+}
+
+async function checkSession() {
+  try {
+    const res = await fetch("/api/session", { cache: "no-store" });
+    const data = (await res.json()) as { signedIn?: boolean };
+    setSignedIn(!!data.signedIn);
+  } catch {
+    setSignedIn(false);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -615,12 +612,16 @@ export default function Dashboard() {
     getThemePref,
     () => "system" as ThemePref,
   );
-  const appKey = useSyncExternalStore(
+  const signedIn = useSyncExternalStore(
     subscribeSession,
-    getSessionKey,
+    getSignedIn,
     () => undefined,
   );
+  useEffect(() => {
+    void checkSession();
+  }, []);
   const [inputValue, setInputValue] = useState("");
+  const [signingIn, setSigningIn] = useState(false);
   const [keys, setKeys] = useState<KeyUsage[] | null>(null);
   const [localUsage, setLocalUsage] = useState<LocalUsage[] | null>(null);
   const [paused, setPaused] = useState<string[]>([]);
@@ -671,14 +672,12 @@ export default function Dashboard() {
   // the abandoned run can't write into the new one.
   const runIdRef = useRef(0);
 
-  const load = useCallback(async (key: string) => {
+  const load = useCallback(async () => {
     try {
-      const res = await fetch("/api/quotas", {
-        headers: { Authorization: `Bearer ${key}` },
-      });
+      const res = await fetch("/api/quotas");
       if (res.status === 401) {
-        setError("Wrong key — check APP_API_KEY and try again.");
-        setSessionKey(null);
+        setError("Your sign-in has ended: sign in again.");
+        setSignedIn(false);
         return;
       }
       if (!res.ok) {
@@ -696,11 +695,9 @@ export default function Dashboard() {
     }
   }, []);
 
-  const loadTokens = useCallback(async (key: string) => {
+  const loadTokens = useCallback(async () => {
     try {
-      const res = await fetch("/api/tokens", {
-        headers: { Authorization: `Bearer ${key}` },
-      });
+      const res = await fetch("/api/tokens");
       if (!res.ok) return;
       const data = await res.json();
       setTokens(data.tokens);
@@ -709,11 +706,9 @@ export default function Dashboard() {
     }
   }, []);
 
-  const loadLocalAgent = useCallback(async (key: string) => {
+  const loadLocalAgent = useCallback(async () => {
     try {
-      const res = await fetch("/api/local-agent/health", {
-        headers: { Authorization: `Bearer ${key}` },
-      });
+      const res = await fetch("/api/local-agent/health");
       const data = await res.json();
       if (!res.ok) {
         setLocalAgentError(
@@ -732,11 +727,9 @@ export default function Dashboard() {
 
   // Model lists change rarely (the server caches them for 10 minutes), so
   // they're fetched once per sign-in rather than on every refresh tick.
-  const loadModels = useCallback(async (key: string) => {
+  const loadModels = useCallback(async () => {
     try {
-      const res = await fetch("/api/models", {
-        headers: { Authorization: `Bearer ${key}` },
-      });
+      const res = await fetch("/api/models");
       if (!res.ok) return;
       const data = await res.json();
       setModels(data.providers);
@@ -746,14 +739,14 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    if (!appKey) return;
+    if (!signedIn) return;
     let cancelled = false;
 
     async function tick() {
-      if (!cancelled && appKey) {
-        await load(appKey);
-        await loadTokens(appKey);
-        await loadLocalAgent(appKey);
+      if (!cancelled) {
+        await load();
+        await loadTokens();
+        await loadLocalAgent();
       }
     }
 
@@ -763,27 +756,25 @@ export default function Dashboard() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [appKey, load, loadTokens, loadLocalAgent]);
+  }, [signedIn, load, loadTokens, loadLocalAgent]);
 
   useEffect(() => {
-    if (!appKey) return;
+    if (!signedIn) return;
     async function run() {
-      if (appKey) await loadModels(appKey);
+      await loadModels();
     }
     void run();
-  }, [appKey, loadModels]);
+  }, [signedIn, loadModels]);
 
   // The monthly report: refreshed with everything else, and at once when the
   // month changes or a run finishes. A reply for a month that's no longer
   // selected is dropped.
   useEffect(() => {
-    if (!appKey) return;
+    if (!signedIn) return;
     let cancelled = false;
     async function run() {
       try {
-        const res = await fetch(`/api/usage?month=${usageMonth}`, {
-          headers: { Authorization: `Bearer ${appKey}` },
-        });
+        const res = await fetch(`/api/usage?month=${usageMonth}`);
         if (!res.ok) return;
         const data: MonthUsage = await res.json();
         if (!cancelled) setMonthUsage(data);
@@ -797,7 +788,7 @@ export default function Dashboard() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [appKey, usageMonth, usageRefresh]);
+  }, [signedIn, usageMonth, usageRefresh]);
 
   // Follow new output as it streams, unless the user scrolled up to read.
   useEffect(() => {
@@ -807,16 +798,13 @@ export default function Dashboard() {
 
   async function handleCreateToken(e: FormEvent) {
     e.preventDefault();
-    if (!appKey) return;
+    if (!signedIn) return;
     setTokenBusy(true);
     setTokenError(null);
     try {
       const res = await fetch("/api/tokens", {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${appKey}`,
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ label: tokenLabel }),
       });
       const data = await res.json();
@@ -826,7 +814,7 @@ export default function Dashboard() {
       }
       setNewToken(data.token);
       setTokenLabel("");
-      await loadTokens(appKey);
+      await loadTokens();
     } catch {
       setTokenError("Network error creating token");
     } finally {
@@ -835,7 +823,7 @@ export default function Dashboard() {
   }
 
   async function handleRevoke(id: string) {
-    if (!appKey) return;
+    if (!signedIn) return;
     if (
       !confirm(
         "Revoke this token? Anything using it will stop working immediately.",
@@ -845,25 +833,21 @@ export default function Dashboard() {
     try {
       const res = await fetch(`/api/tokens?id=${encodeURIComponent(id)}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${appKey}` },
       });
-      if (res.ok) await loadTokens(appKey);
+      if (res.ok) await loadTokens();
     } catch {
       // best-effort — the list will just look stale until next refresh
     }
   }
 
   async function handleTogglePause(p: ChatProvider, pause: boolean) {
-    if (!appKey) return;
+    if (!signedIn) return;
     setPauseBusy(p);
     setPauseError(null);
     try {
       const res = await fetch("/api/providers", {
         method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${appKey}`,
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider: p, paused: pause }),
       });
       const data = await res.json().catch(() => null);
@@ -873,7 +857,7 @@ export default function Dashboard() {
       }
       setPaused(data.paused);
       // A paused cloud provider's model list isn't fetched; get it now.
-      if (!pause) await loadModels(appKey);
+      if (!pause) await loadModels();
     } catch {
       setPauseError("Network error reaching /api/providers");
     } finally {
@@ -908,7 +892,7 @@ export default function Dashboard() {
   async function handleSendChat(e: FormEvent) {
     e.preventDefault();
     const prompt = chatInput.trim();
-    if (!appKey || !prompt || chatBusy || paused.includes(chatProvider)) return;
+    if (!signedIn || !prompt || chatBusy || paused.includes(chatProvider)) return;
 
     const model =
       chatModel === CUSTOM_MODEL ? chatCustomModel.trim() : chatModel;
@@ -954,7 +938,7 @@ export default function Dashboard() {
     let thinking = "";
     let content = "";
 
-    await streamChat(appKey, body, controller.signal, {
+    await streamChat(body, controller.signal, {
       onThinking: (text) => {
         if (!isCurrent()) return;
         thinking += text;
@@ -1000,7 +984,7 @@ export default function Dashboard() {
       },
     });
     // Count this run on the Dashboard and in Analytics now, not at the next tick.
-    void load(appKey);
+    void load();
     setUsageRefresh((n) => n + 1);
 
     if (!isCurrent()) return;
@@ -1012,7 +996,8 @@ export default function Dashboard() {
 
   function signOut() {
     abortRef.current?.abort();
-    setSessionKey(null);
+    void fetch("/api/session", { method: "DELETE" }).catch(() => {});
+    setSignedIn(false);
     setKeys(null);
     setLocalUsage(null);
     setMonthUsage(null);
@@ -1028,13 +1013,38 @@ export default function Dashboard() {
   // Sign-in
   // -------------------------------------------------------------------------
 
-  // Server render and the first (hydrating) client render: the session key
-  // isn't known yet, so show nothing rather than guess wrong.
-  if (appKey === undefined) {
+  // The key goes to the server once; what comes back is the sign-in cookie.
+  async function signIn(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSigningIn(true);
+    try {
+      const res = await fetch("/api/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: inputValue }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setError(data?.error || `Sign-in failed (HTTP ${res.status})`);
+        return;
+      }
+      setInputValue("");
+      setSignedIn(true);
+    } catch {
+      setError("Network error reaching the gateway");
+    } finally {
+      setSigningIn(false);
+    }
+  }
+
+  // Server render and the first (hydrating) client render: whether there's
+  // a sign-in isn't known yet, so show nothing rather than guess wrong.
+  if (signedIn === undefined) {
     return <main className={styles.loginWrap} />;
   }
 
-  if (!appKey) {
+  if (!signedIn) {
     return (
       <main className={styles.loginWrap}>
         <div className={styles.loginCard}>
@@ -1048,13 +1058,7 @@ export default function Dashboard() {
           <p className={styles.subtitle}>
             Sign in with your APP_API_KEY to manage providers, keys and usage.
           </p>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              setError(null);
-              setSessionKey(inputValue);
-            }}
-          >
+          <form onSubmit={signIn}>
             <div className={styles.field}>
               <label className={styles.label} htmlFor="appkey">
                 APP_API_KEY
@@ -1073,9 +1077,9 @@ export default function Dashboard() {
               type="submit"
               className={`${styles.button} ${styles.buttonFull}`}
               style={{ marginTop: 16 }}
-              disabled={!inputValue}
+              disabled={!inputValue || signingIn}
             >
-              Sign in
+              {signingIn ? "Signing in…" : "Sign in"}
             </button>
           </form>
           {error && (
@@ -2395,8 +2399,10 @@ export default function Dashboard() {
           Send <code>Authorization: Bearer</code> with your APP_API_KEY or an
           access token, and a JSON body. <code>/api/chat</code> returns one JSON
           response; <code>/api/chat/stream</code> takes the same body and
-          streams Server-Sent Events. Every endpoint, field and response is in
-          the{" "}
+          streams Server-Sent Events. The examples read the key from{" "}
+          <code>$AI_THUN_KEY</code>: set it first, with{" "}
+          <code>export AI_THUN_KEY=…</code>. Every endpoint, field and
+          response is in the{" "}
           <Link href="/documents" className={styles.inlineLink}>
             documentation
           </Link>
@@ -2407,11 +2413,11 @@ export default function Dashboard() {
           <div className={styles.codeBlockLabel}>Basic request</div>
           <div className={styles.codeBlockBody}>
             <pre className={styles.pre}>{`curl -X POST ${origin}/api/chat \\
-  -H "Authorization: Bearer ${appKey}" \\
+  -H "Authorization: Bearer $AI_THUN_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"prompt": "Hello!"}'`}</pre>
             <CopyButton
-              value={`curl -X POST ${origin}/api/chat \\\n  -H "Authorization: Bearer ${appKey}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"prompt": "Hello!"}'`}
+              value={`curl -X POST ${origin}/api/chat \\\n  -H "Authorization: Bearer $AI_THUN_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{"prompt": "Hello!"}'`}
             />
           </div>
         </div>
@@ -2422,11 +2428,11 @@ export default function Dashboard() {
           </div>
           <div className={styles.codeBlockBody}>
             <pre className={styles.pre}>{`curl -X POST ${origin}/api/chat \\
-  -H "Authorization: Bearer ${appKey}" \\
+  -H "Authorization: Bearer $AI_THUN_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"provider": "groq", "model": "openai/gpt-oss-120b", "prompt": "Hello!"}'`}</pre>
             <CopyButton
-              value={`curl -X POST ${origin}/api/chat \\\n  -H "Authorization: Bearer ${appKey}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"provider": "groq", "model": "openai/gpt-oss-120b", "prompt": "Hello!"}'`}
+              value={`curl -X POST ${origin}/api/chat \\\n  -H "Authorization: Bearer $AI_THUN_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{"provider": "groq", "model": "openai/gpt-oss-120b", "prompt": "Hello!"}'`}
             />
           </div>
         </div>
@@ -2435,9 +2441,9 @@ export default function Dashboard() {
           <div className={styles.codeBlockLabel}>Listing models</div>
           <div className={styles.codeBlockBody}>
             <pre className={styles.pre}>{`curl ${origin}/api/models \\
-  -H "Authorization: Bearer ${appKey}"`}</pre>
+  -H "Authorization: Bearer $AI_THUN_KEY"`}</pre>
             <CopyButton
-              value={`curl ${origin}/api/models \\\n  -H "Authorization: Bearer ${appKey}"`}
+              value={`curl ${origin}/api/models \\\n  -H "Authorization: Bearer $AI_THUN_KEY"`}
             />
           </div>
         </div>

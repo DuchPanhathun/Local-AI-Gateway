@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isValidGeneratedToken } from "@/lib/api-tokens";
 import { image as generateImage, recordLocalRun } from "@/lib/local-agent";
 import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
+import { checkAccess, refusal } from "@/lib/auth";
 
 // Codex's image_gen tool reports ~75s per image; give it headroom.
 export const maxDuration = 300;
@@ -11,10 +11,6 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
-
-function unauthorized() {
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: CORS_HEADERS });
-}
 
 export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
@@ -30,16 +26,8 @@ type ImageRequestBody = {
 // Only Codex can generate images today (local-agent-gateway's own limitation,
 // via its built-in image_gen tool under your ChatGPT login — no API key).
 export async function POST(req: NextRequest) {
-  const appKey = process.env.APP_API_KEY;
-  if (appKey) {
-    const auth = req.headers.get("authorization");
-    const bearer = auth?.startsWith("Bearer ") ? auth.slice(7) : undefined;
-    const isOwner = bearer === appKey;
-    const isGeneratedToken = !isOwner && !!bearer && (await isValidGeneratedToken(bearer));
-    if (!isOwner && !isGeneratedToken) {
-      return unauthorized();
-    }
-  }
+  const access = await checkAccess(req, "app");
+  if (!access.ok) return refusal(access, CORS_HEADERS);
 
   let payload: ImageRequestBody;
   try {

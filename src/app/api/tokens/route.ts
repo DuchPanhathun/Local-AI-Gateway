@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createToken, maskToken, readTokens, revokeToken } from "@/lib/api-tokens";
+import { checkAccess, refusal } from "@/lib/auth";
 
 // Owner-only: creating/listing/revoking API tokens requires the master
 // APP_API_KEY specifically — a generated token can never be used to mint or
@@ -10,14 +11,9 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
 
-function requireOwner(req: NextRequest): NextResponse | null {
-  const appKey = process.env.APP_API_KEY;
-  if (!appKey) return null; // no owner key configured -> open, matches rest of the app
-  const auth = req.headers.get("authorization");
-  if (auth !== `Bearer ${appKey}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: CORS_HEADERS });
-  }
-  return null;
+async function requireOwner(req: NextRequest): Promise<Response | null> {
+  const access = await checkAccess(req, "owner");
+  return access.ok ? null : refusal(access, CORS_HEADERS);
 }
 
 export function OPTIONS() {
@@ -25,7 +21,7 @@ export function OPTIONS() {
 }
 
 export async function GET(req: NextRequest) {
-  const denied = requireOwner(req);
+  const denied = await requireOwner(req);
   if (denied) return denied;
 
   try {
@@ -50,7 +46,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const denied = requireOwner(req);
+  const denied = await requireOwner(req);
   if (denied) return denied;
 
   let label = "";
@@ -74,7 +70,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  const denied = requireOwner(req);
+  const denied = await requireOwner(req);
   if (denied) return denied;
 
   const id = req.nextUrl.searchParams.get("id");

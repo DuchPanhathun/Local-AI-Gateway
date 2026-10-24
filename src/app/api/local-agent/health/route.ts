@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { health } from "@/lib/local-agent";
+import { checkAccess, refusal } from "@/lib/auth";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": process.env.ALLOWED_ORIGIN || "*",
@@ -13,13 +14,8 @@ export function OPTIONS() {
 
 // Owner-only, like /api/quotas and /api/tokens.
 export async function GET(req: NextRequest) {
-  const appKey = process.env.APP_API_KEY;
-  if (appKey) {
-    const auth = req.headers.get("authorization");
-    if (auth !== `Bearer ${appKey}`) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: CORS_HEADERS });
-    }
-  }
+  const access = await checkAccess(req, "owner");
+  if (!access.ok) return refusal(access, CORS_HEADERS);
 
   try {
     const { status, data } = await health();

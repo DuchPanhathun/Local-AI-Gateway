@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { PROVIDER_IDS } from "@/lib/ai-providers";
 import { LOCAL_AGENT_PROVIDER_IDS } from "@/lib/local-agent";
 import { getPausedProviders, setProviderPaused } from "@/lib/provider-state";
+import { checkAccess, refusal } from "@/lib/auth";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": process.env.ALLOWED_ORIGIN || "*",
@@ -11,30 +12,23 @@ const CORS_HEADERS = {
 
 const ALL_PROVIDERS: string[] = [...PROVIDER_IDS, ...LOCAL_AGENT_PROVIDER_IDS];
 
-// Owner only: access tokens can call providers, not switch them off.
-function isOwner(req: NextRequest): boolean {
-  const appKey = process.env.APP_API_KEY;
-  return !appKey || req.headers.get("authorization") === `Bearer ${appKey}`;
-}
-
-function unauthorized() {
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: CORS_HEADERS });
-}
-
 export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }
 
+// Owner only: access tokens can call providers, not switch them off.
 // GET → {paused: ["cerebras", ...]}
 export async function GET(req: NextRequest) {
-  if (!isOwner(req)) return unauthorized();
+  const access = await checkAccess(req, "owner");
+  if (!access.ok) return refusal(access, CORS_HEADERS);
   return NextResponse.json({ paused: await getPausedProviders() }, { headers: CORS_HEADERS });
 }
 
 // PATCH {provider, paused: true|false} pauses or resumes one provider and
 // returns the new {paused: [...]} list. Takes effect on the next request.
 export async function PATCH(req: NextRequest) {
-  if (!isOwner(req)) return unauthorized();
+  const access = await checkAccess(req, "owner");
+  if (!access.ok) return refusal(access, CORS_HEADERS);
 
   let body: { provider?: unknown; paused?: unknown };
   try {

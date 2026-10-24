@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { transcribeWithGroq } from "@/lib/ai-providers";
-import { isValidGeneratedToken } from "@/lib/api-tokens";
 import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
+import { checkAccess, refusal } from "@/lib/auth";
 
 // Whisper on Groq answers in about a second; this leaves room for trying every key.
 export const maxDuration = 60;
@@ -22,10 +22,6 @@ const FORWARDED_FIELDS = [
   "timestamp_granularities[]",
 ];
 
-function unauthorized() {
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: CORS_HEADERS });
-}
-
 function badRequest(error: string) {
   return NextResponse.json({ error }, { status: 400, headers: CORS_HEADERS });
 }
@@ -39,16 +35,8 @@ export function OPTIONS() {
 // GROQ_TRANSCRIBE_MODEL or whisper-large-v3-turbo), `prompt`, `language`,
 // `response_format` and `temperature`. The answer is Groq's, e.g. { "text": "…" }.
 export async function POST(req: NextRequest) {
-  const appKey = process.env.APP_API_KEY;
-  if (appKey) {
-    const auth = req.headers.get("authorization");
-    const bearer = auth?.startsWith("Bearer ") ? auth.slice(7) : undefined;
-    const isOwner = bearer === appKey;
-    const isGeneratedToken = !isOwner && !!bearer && (await isValidGeneratedToken(bearer));
-    if (!isOwner && !isGeneratedToken) {
-      return unauthorized();
-    }
-  }
+  const access = await checkAccess(req, "app");
+  if (!access.ok) return refusal(access, CORS_HEADERS);
 
   // Transcription runs on the Groq keys, so pausing Groq pauses it too.
   if (await isProviderPaused("groq")) {

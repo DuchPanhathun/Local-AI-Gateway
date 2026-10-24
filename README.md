@@ -298,6 +298,7 @@ same machine as `local-agent-gateway` rather than on Vercel. Redeploy after a co
 ```bash
 # from this repo, on the machine you're developing on
 rsync -az --delete --exclude .git/ --exclude node_modules/ --exclude .next/ --exclude .env \
+  --exclude deploy/vercel/.vercel/ --exclude deploy/vercel/.env.local \
   ./ thun@100.81.199.119:~/Desktop/documents/Project/ai-thun/
 ssh thun@100.81.199.119 '
   export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use 24
@@ -306,7 +307,7 @@ ssh thun@100.81.199.119 '
 '
 ```
 
-`.env` on the host isn't touched by rsync (excluded) — edit it there directly if it needs to change,
+`.env` on the host isn't touched by rsync (excluded), nor is the Vercel link `deploy/vercel/deploy.sh` makes there — edit it there directly if it needs to change,
 then `systemctl --user restart ai-thun`.
 
 First-time setup: [deploy/ai-thun.service](deploy/ai-thun.service) installed to
@@ -315,6 +316,40 @@ First-time setup: [deploy/ai-thun.service](deploy/ai-thun.service) installed to
 **Port 8443, not 443** — 443 is already Funneled (public internet) for a different project
 (`marketing-agent`, which needs it for a Telegram webhook); `tailscale serve`/`funnel` share one slot
 per port, so don't run anything on 443 here without checking `tailscale serve status` first.
+
+### The public address: https://thun-murex.duchpanhathun.com
+
+The tailnet address above stays as it is. For the internet, there's one more way in, and only
+one, with four parts:
+
+1. **Vercel** serves `thun-murex.duchpanhathun.com` (free, with its certificate) and forwards every
+   request to the Latitude, adding a secret header, `x-origin-secret`
+   ([deploy/vercel/vercel.json](deploy/vercel/vercel.json)).
+2. **Tailscale Funnel** carries it to the Latitude, on Funnel's port 10000:
+   `tailscale funnel --bg --https=10000 http://127.0.0.1:3001`.
+3. **The public door** ([deploy/public-door.mjs](deploy/public-door.mjs), user service
+   `thun-murex-door` on `127.0.0.1:3001`) refuses whatever lacks the secret. What it lets through
+   goes to the gateway marked `x-thun-public: 1`, with the visitor's address in `x-real-ip`, and
+   comes back with `Cache-Control: no-store` so Vercel keeps none of it (the build's own files
+   aside). Funnel never points at the gateway's own port.
+4. **The gateway** applies its internet rules to what's marked public
+   ([src/lib/auth.ts](src/lib/auth.ts)): keys compared in constant time, 10 wrong keys in 10 minutes
+   lock an address out for 15 minutes, and no requests at all without `APP_API_KEY`. The console signs
+   in with a cookie its scripts can't read (`/api/session`). Streams send a `: keep-alive` comment
+   every 20 s while quiet: Vercel waits at most 2 minutes for data, so an answer that doesn't stream
+   has to start within 2 minutes when it comes through this address.
+
+Setting it up, on the Latitude:
+
+```bash
+deploy/setup-door.sh                                   # ORIGIN_SECRET in .env, and the door's service
+tailscale funnel --bg --https=10000 http://127.0.0.1:3001
+deploy/vercel/deploy.sh                                # after `vercel login`
+deploy/vercel/dns.sh                                   # after `aws login --profile personal --region us-east-1`
+```
+
+To close it again: `tailscale funnel --https=10000 off`. To change the secret: a new `ORIGIN_SECRET`
+in `.env`, then `systemctl --user restart thun-murex-door` and `deploy/vercel/deploy.sh`.
 
 The route sets `maxDuration = 300`; that's a Vercel/serverless concept and has no effect self-hosted
 (`next start` has no per-request timeout), left as-is in case this ever moves back to Vercel.

@@ -1,0 +1,22 @@
+# systemd *user* service for the public door (deploy/public-door.mjs): the one
+# way in from the internet. Tailscale Funnel sends public traffic to it on
+# 127.0.0.1:3001; it lets through only what Vercel signed, to the gateway on
+# 127.0.0.1:3000. Installed as ~/.config/systemd/user/thun-murex-door.service
+# by deploy/setup-door.sh. %h is the user's home.
+[Unit]
+Description=Thun Murex public door (internet, through Funnel and Vercel, to the gateway)
+After=ai-thun.service
+Wants=ai-thun.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Desktop/documents/Project/ai-thun
+Environment=DOOR_PORT=3001
+Environment=GATEWAY_PORT=3000
+ExecStart=%h/.nvm/versions/node/v24.22.0/bin/node %h/Desktop/documents/Project/ai-thun/deploy/public-door.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

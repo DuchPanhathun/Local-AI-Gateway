@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isProviderId, PROVIDER_IDS, streamProvider } from "@/lib/ai-providers";
-import { isValidGeneratedToken } from "@/lib/api-tokens";
 import {
   askStream,
   isLocalAgentProviderId,
@@ -11,6 +10,8 @@ import {
 } from "@/lib/local-agent";
 import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
 import { bodyRetryAfter, RateLimitedError, retryAfterHeaders } from "@/lib/rate-limits";
+import { checkAccess, refusal } from "@/lib/auth";
+import { withKeepAlive } from "@/lib/sse";
 
 export const maxDuration = 300;
 
@@ -26,10 +27,6 @@ const SSE_HEADERS = {
   "Cache-Control": "no-cache",
   Connection: "keep-alive",
 };
-
-function unauthorized() {
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: CORS_HEADERS });
-}
 
 export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
@@ -56,16 +53,8 @@ type StreamRequestBody = {
 // (relayStream renames done.usage's fields); cloud providers' OpenAI-style
 // chunks are converted by streamProvider.
 export async function POST(req: NextRequest) {
-  const appKey = process.env.APP_API_KEY;
-  if (appKey) {
-    const auth = req.headers.get("authorization");
-    const bearer = auth?.startsWith("Bearer ") ? auth.slice(7) : undefined;
-    const isOwner = bearer === appKey;
-    const isGeneratedToken = !isOwner && !!bearer && (await isValidGeneratedToken(bearer));
-    if (!isOwner && !isGeneratedToken) {
-      return unauthorized();
-    }
-  }
+  const access = await checkAccess(req, "app");
+  if (!access.ok) return refusal(access, CORS_HEADERS);
 
   let payload: StreamRequestBody;
   try {
@@ -124,7 +113,7 @@ export async function POST(req: NextRequest) {
       const stream = relayStream(upstream.body, req.signal, (outcome) =>
         recordLocalRun(providerId, model, outcome)
       );
-      return new NextResponse(stream, { status: upstream.status, headers: SSE_HEADERS });
+      return new NextResponse(withKeepAlive(stream), { status: upstream.status, headers: SSE_HEADERS });
     } catch (err) {
       recordLocalRun(providerId, model, { status: req.signal.aborted ? "stopped" : "error" });
       return NextResponse.json(
@@ -177,7 +166,7 @@ export async function POST(req: NextRequest) {
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status, headers: CORS_HEADERS });
     }
-    return new NextResponse(result.stream, { headers: SSE_HEADERS });
+    return new NextResponse(withKeepAlive(result.stream), { headers: SSE_HEADERS });
   } catch (err) {
     if (err instanceof RateLimitedError) {
       return NextResponse.json(

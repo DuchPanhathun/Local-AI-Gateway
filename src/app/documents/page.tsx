@@ -639,6 +639,18 @@ export default function DocumentsPage() {
               <code>{`{"error": "Unauthorized"}`}</code>. Keys are secrets: call the gateway from
               your own server or scripts, not from code that runs in someone’s web browser.
             </p>
+            <ul>
+              <li>
+                <strong>Wrong keys lock you out for a while.</strong> After 10 wrong keys in 10
+                minutes from one address, every request from there gets <code>429</code> for 15
+                minutes, with a <code>Retry-After</code> header, even with the right key.
+              </li>
+              <li>
+                <strong>The console</strong> sends your owner key once, to sign in. The browser then
+                keeps a sign-in cookie for 7 days, which the page’s scripts can’t read, never the
+                key itself. A new <code>APP_API_KEY</code> signs everyone out.
+              </li>
+            </ul>
           </Section>
 
           <Section id="quickstart" title="Quickstart">
@@ -713,6 +725,11 @@ export default function DocumentsPage() {
             <CodeBlock code={STREAM_OUTPUT} label="What the stream looks like" />
             <CodeTabs tabs={STREAM_TABS} />
             <ul>
+              <li>
+                While nothing new comes for 20 seconds (a CLI at work), the stream sends a
+                comment line, <code>: keep-alive</code>, so nothing between you and the gateway
+                closes it. Skip lines that start with <code>:</code>, as SSE readers do.
+              </li>
               <li>
                 A problem found before the stream starts (a wrong key, an unknown provider, a
                 paused provider, a provider’s own error such as <code>402</code>) comes back as an
@@ -975,9 +992,9 @@ export default function DocumentsPage() {
                 [<code key="c">400</code>, <>Something’s wrong with the request: invalid JSON, an unknown provider, no <code>prompt</code> or <code>messages</code>, or a bad <code>workdir</code>, <code>session_id</code> or model for a CLI.</>],
                 [<code key="c">401</code>, "The key is missing or wrong, or this key can’t call this endpoint."],
                 [<code key="c">402</code>, "The cloud provider wants payment (passed on from the provider)."],
-                [<code key="c">403</code>, <><code>workdir</code> is outside the folders the gateway allows.</>],
+                [<code key="c">403</code>, <><code>workdir</code> is outside the folders the gateway allows, or a request reached the gateway’s public door without coming through its address.</>],
                 [<code key="c">404</code>, "No access token with that id."],
-                [<code key="c">429</code>, <>Too many requests: every key of a cloud provider is rate limited or at its daily limit, a CLI reached its plan’s usage limit, a CLI already has 2 running, or every Groq key is at its transcription limit. <code>Retry-After</code> says how many seconds to wait, when that’s known.</>],
+                [<code key="c">429</code>, <>Too many requests: 10 wrong keys from your address in 10 minutes (for 15 minutes), every key of a cloud provider is rate limited or at its daily limit, a CLI reached its plan’s usage limit, a CLI already has 2 running, or every Groq key is at its transcription limit. <code>Retry-After</code> says how many seconds to wait, when that’s known.</>],
                 [<code key="c">502</code>, "The provider failed: it couldn’t be reached, or the CLI failed or isn’t signed in."],
                 [<code key="c">503</code>, <>The provider is paused. See <a href="#providers">Pause &amp; resume</a>.</>],
                 [<code key="c">504</code>, "A CLI took longer than 5 minutes."],
