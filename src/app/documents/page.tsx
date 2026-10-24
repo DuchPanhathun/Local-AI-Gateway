@@ -394,7 +394,24 @@ const LIMITS_RESPONSE = `{
         …
       ]
     },
-    "claude": { "installed": true, "supported": false, "limits": [], … },
+    "claude": {
+      "installed": true,
+      "supported": true,
+      "limits": [
+        {
+          "id": "five_hour",
+          "window": "5h",
+          "remaining_fraction": 0.93,
+          "resets_at": "2026-10-24T23:50:00+07:00",
+          "name": "Current session",
+          "group": null,
+          "models": null
+        },
+        { "id": "seven_day", "window": "weekly", "remaining_fraction": 0.16, … }
+      ],
+      …
+    },
+    "codex": { "installed": true, "supported": false, "limits": [], … },
     …
   }
 }`;
@@ -930,11 +947,12 @@ export default function DocumentsPage() {
             <p>
               How much of each CLI subscription’s usage limits is left, and when each one is
               fully available again, as the CLI itself reports it. Checking uses none of it. Only
-              CLIs that can say are filled in (Antigravity); the others have{" "}
+              CLIs that can say are filled in (Claude Code and Antigravity); the others have{" "}
               <code>supported: false</code>. The limits belong to the account, so use outside Thun
               Murex counts too. They refill in rolling windows (<code>5h</code>,{" "}
-              <code>weekly</code>), not daily, and Antigravity keeps separate limits for its
-              Gemini models and for its Claude and GPT models. The answer is cached for 2
+              <code>weekly</code>), not daily. Claude Code’s 5-hour session has no{" "}
+              <code>resets_at</code> until it starts; Antigravity keeps separate limits for its
+              Gemini models and for its Claude and GPT models. Answers are cached for a few
               minutes; a signed-out CLI comes back with <code>error</code> set.
             </p>
             <CodeBlock code={LIMITS_RESPONSE} label="Response (shortened)" />

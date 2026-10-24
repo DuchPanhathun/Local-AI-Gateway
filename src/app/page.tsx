@@ -2447,7 +2447,11 @@ export default function Dashboard() {
                       <RemainingBar fraction={l.remaining_fraction} />
                     </td>
                     <td className={styles.dim}>
-                      {resetLabel(l.resets_at, now)}
+                      {l.resets_at
+                        ? resetLabel(l.resets_at, now)
+                        : l.remaining_fraction >= 1
+                          ? "Not started"
+                          : "—"}
                     </td>
                   </tr>
                 ));

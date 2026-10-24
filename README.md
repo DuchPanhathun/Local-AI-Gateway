@@ -196,8 +196,9 @@ the host and run `claude` / `codex login` / `gemini` / `agy` once each.
 
 Plan limits: `GET /api/local-agent/limits` (owner-only) relays the gateway's `GET /limits`: per
 CLI, how much of each subscription limit is left (`remaining_fraction`) and when it resets
-(`resets_at`), from the CLIs that can say (Antigravity, via `agy -p /quota`, which uses none of
-it). Shown under Analytics → Plan limits and on the dashboard's CLI cards. Cached 2 minutes.
+(`resets_at`), from the CLIs that can say: Claude Code (`claude -p /usage`: the 5-hour session
+and the weekly limits) and Antigravity (`agy -p /quota`), neither of which uses any of it. Shown
+under Analytics → Plan limits and on the dashboard's CLI cards. Cached 2–5 minutes.
 
 ## How key rotation works
 

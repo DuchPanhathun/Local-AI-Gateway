@@ -105,7 +105,8 @@ export async function models(): Promise<GatewayCallResult> {
 }
 
 // How much of each CLI's subscription limits is left and when they reset,
-// from the CLIs that can say (Antigravity). Checking uses none of it.
+// from the CLIs that can say (Claude Code, Antigravity). Checking uses none
+// of it.
 export async function limits(): Promise<GatewayCallResult> {
   const res = await fetch(`${baseUrl()}/limits`, { headers: authHeaders() });
   return { status: res.status, data: await res.json() };
