@@ -41,6 +41,7 @@ type StreamRequestBody = {
   session_id?: string;
   workdir?: string;
   no_tools?: boolean;
+  temporary?: boolean; // chatgpt only
   // cloud providers: any other OpenAI-compatible field (max_tokens,
   // temperature, chat_template_kwargs, ...) is forwarded as-is.
   [key: string]: unknown;
@@ -98,6 +99,7 @@ export async function POST(req: NextRequest) {
           ...(payload.session_id ? { session_id: payload.session_id } : {}),
           ...(payload.workdir ? { workdir: payload.workdir } : {}),
           ...(payload.no_tools !== undefined ? { no_tools: Boolean(payload.no_tools) } : {}),
+          ...(payload.temporary !== undefined ? { temporary: Boolean(payload.temporary) } : {}),
         },
         req.signal
       );
@@ -157,6 +159,7 @@ export async function POST(req: NextRequest) {
     session_id: _sessionId,
     workdir: _workdir,
     no_tools: _noTools,
+    temporary: _temporary,
     ...rest
   } = payload;
   /* eslint-enable @typescript-eslint/no-unused-vars */

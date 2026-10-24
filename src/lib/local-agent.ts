@@ -4,16 +4,21 @@
 // providers in ai-providers.ts, these run as real subprocesses with filesystem
 // access to an allowlisted workdir — that's local-agent-gateway's job to enforce,
 // not ours. We just proxy.
+//
+// The `chatgpt` provider is chatgpt-web-gateway (../chatgpt-web) instead, another
+// local service: it answers through chatgpt.com in its own signed-in Chrome
+// window. It speaks the same API, so it's called the same way at its own address.
 
 import { getDayUsage, recordUsageEvent, todayUTC } from "./usage-ledger";
 
-export type LocalAgentProviderId = "claude" | "codex" | "gemini" | "antigravity";
+export type LocalAgentProviderId = "claude" | "codex" | "gemini" | "antigravity" | "chatgpt";
 
 export const LOCAL_AGENT_PROVIDER_IDS: LocalAgentProviderId[] = [
   "claude",
   "codex",
   "gemini",
   "antigravity",
+  "chatgpt",
 ];
 
 export function isLocalAgentProviderId(value: string): value is LocalAgentProviderId {
@@ -32,14 +37,39 @@ export function lastUserMessage(messages: unknown): string | null {
   return null;
 }
 
-function baseUrl(): string {
-  return process.env.LOCAL_AGENT_URL || "http://127.0.0.1:8787";
+type Gateway = {
+  name: string;
+  url: string;
+  tokenVar: string;
+  providers: LocalAgentProviderId[];
+};
+
+function localAgentGateway(): Gateway {
+  return {
+    name: "local-agent-gateway",
+    url: process.env.LOCAL_AGENT_URL || "http://127.0.0.1:8787",
+    tokenVar: "LOCAL_AGENT_TOKEN",
+    providers: ["claude", "codex", "gemini", "antigravity"],
+  };
 }
 
-function authHeaders(extra?: Record<string, string>): Record<string, string> {
-  const token = process.env.LOCAL_AGENT_TOKEN;
+function chatgptWebGateway(): Gateway {
+  return {
+    name: "chatgpt-web-gateway",
+    url: process.env.CHATGPT_WEB_URL || "http://127.0.0.1:8789",
+    tokenVar: "CHATGPT_WEB_TOKEN",
+    providers: ["chatgpt"],
+  };
+}
+
+function gatewayFor(provider: LocalAgentProviderId): Gateway {
+  return provider === "chatgpt" ? chatgptWebGateway() : localAgentGateway();
+}
+
+function authHeaders(gateway: Gateway, extra?: Record<string, string>): Record<string, string> {
+  const token = process.env[gateway.tokenVar];
   if (!token) {
-    throw new Error("LOCAL_AGENT_TOKEN is not set — local-agent providers are unavailable.");
+    throw new Error(`${gateway.tokenVar} is not set — ${gateway.providers.join(", ")} unavailable.`);
   }
   return { Authorization: `Bearer ${token}`, ...extra };
 }
@@ -49,17 +79,29 @@ export type AskRequest = {
   prompt: string;
   model?: string;
   session_id?: string;
-  workdir?: string;
-  no_tools?: boolean;
+  workdir?: string; // CLIs only
+  no_tools?: boolean; // CLIs only
+  temporary?: boolean; // chatgpt only: false saves the chat so session_id can continue it
 };
 
 export type GatewayCallResult = { status: number; data: unknown };
 
+// Each gateway gets only the fields it understands (both refuse unknown ones).
+function askBody(req: AskRequest): string {
+  const { workdir, no_tools, temporary, ...common } = req;
+  return JSON.stringify(
+    req.provider === "chatgpt"
+      ? { ...common, ...(temporary !== undefined ? { temporary } : {}) }
+      : { ...common, ...(workdir ? { workdir } : {}), ...(no_tools !== undefined ? { no_tools } : {}) }
+  );
+}
+
 export async function ask(req: AskRequest): Promise<GatewayCallResult> {
-  const res = await fetch(`${baseUrl()}/ask`, {
+  const gateway = gatewayFor(req.provider);
+  const res = await fetch(`${gateway.url}/ask`, {
     method: "POST",
-    headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify(req),
+    headers: authHeaders(gateway, { "Content-Type": "application/json" }),
+    body: askBody(req),
   });
   return { status: res.status, data: await res.json() };
 }
@@ -67,12 +109,14 @@ export async function ask(req: AskRequest): Promise<GatewayCallResult> {
 // Returns the raw upstream Response so its SSE body can be piped straight
 // through to our own caller without buffering. Pass the incoming request's
 // signal: aborting closes the connection to the gateway, which then kills the
-// CLI's process tree instead of letting it run to completion unread.
+// CLI's process tree (or presses Stop on ChatGPT) instead of letting it run to
+// completion unread.
 export async function askStream(req: AskRequest, signal?: AbortSignal): Promise<Response> {
-  return fetch(`${baseUrl()}/ask/stream`, {
+  const gateway = gatewayFor(req.provider);
+  return fetch(`${gateway.url}/ask/stream`, {
     method: "POST",
-    headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify(req),
+    headers: authHeaders(gateway, { "Content-Type": "application/json" }),
+    body: askBody(req),
     signal,
   });
 }
@@ -86,30 +130,74 @@ export type ImageRequest = {
 };
 
 export async function image(req: ImageRequest): Promise<GatewayCallResult> {
-  const res = await fetch(`${baseUrl()}/image`, {
+  const gateway = localAgentGateway();
+  const res = await fetch(`${gateway.url}/image`, {
     method: "POST",
-    headers: authHeaders({ "Content-Type": "application/json" }),
+    headers: authHeaders(gateway, { "Content-Type": "application/json" }),
     body: JSON.stringify(req),
   });
   return { status: res.status, data: await res.json() };
 }
 
+async function getFrom(gateway: Gateway, path: string): Promise<GatewayCallResult> {
+  try {
+    const res = await fetch(`${gateway.url}${path}`, { headers: authHeaders(gateway) });
+    return { status: res.status, data: await res.json() };
+  } catch (err) {
+    const why = err instanceof Error ? err.message : "unreachable";
+    return { status: 502, data: { error: `${gateway.name}: ${why}` } };
+  }
+}
+
+// GET `path` from both gateways and merge their `providers` maps, so callers
+// see one list. A gateway that is down only takes its own providers with it:
+// they're listed as not installed, with the reason in `error`. Only when both
+// are down is the answer an error, local-agent-gateway's.
+async function fromBoth(path: string): Promise<GatewayCallResult> {
+  const gateways = [localAgentGateway(), chatgptWebGateway()];
+  const results = await Promise.all(gateways.map((g) => getFrom(g, path)));
+  if (results.every((r) => r.status !== 200)) return results[0];
+  const providers: Record<string, unknown> = {};
+  results.forEach((result, i) => {
+    const gateway = gateways[i];
+    const data = result.data as { providers?: Record<string, unknown>; error?: string; detail?: string };
+    const reason =
+      result.status === 200
+        ? null
+        : data.error ?? data.detail ?? `${gateway.name} returned HTTP ${result.status}`;
+    for (const id of gateway.providers) {
+      providers[id] = (result.status === 200 && data.providers?.[id]) || {
+        // Covers every shape callers read: health, models and limits.
+        installed: false,
+        path: null,
+        version: null,
+        default: null,
+        models: [],
+        note: null,
+        supported: false,
+        limits: [],
+        checked_at: null,
+        error: reason ?? `${gateway.name} didn't list ${id}`,
+      };
+    }
+  });
+  const base = results[0].status === 200 ? (results[0].data as object) : {};
+  return { status: 200, data: { ...base, providers } };
+}
+
 export async function health(): Promise<GatewayCallResult> {
-  const res = await fetch(`${baseUrl()}/health`, { headers: authHeaders() });
-  return { status: res.status, data: await res.json() };
+  return fromBoth("/health");
 }
 
 export async function models(): Promise<GatewayCallResult> {
-  const res = await fetch(`${baseUrl()}/models`, { headers: authHeaders() });
-  return { status: res.status, data: await res.json() };
+  return fromBoth("/models");
 }
 
 // How much of each CLI's subscription limits is left and when they reset,
 // from the CLIs that can say (Claude Code, Antigravity). Checking uses none
 // of it.
 export async function limits(): Promise<GatewayCallResult> {
-  const res = await fetch(`${baseUrl()}/limits`, { headers: authHeaders() });
-  return { status: res.status, data: await res.json() };
+  return fromBoth("/limits");
 }
 
 // Tokens one run used, as local-agent-gateway reports them. Only Claude Code

@@ -39,6 +39,7 @@ type ChatRequestBody = {
   session_id?: string;
   workdir?: string;
   no_tools?: boolean;
+  temporary?: boolean; // chatgpt only
   // Any other OpenAI-compatible field (max_tokens, temperature, response_format,
   // reasoning_effort, chat_template_kwargs, top_p, ...) is forwarded as-is to
   // cloud providers — see the passthrough below. `stream` is deliberately
@@ -91,6 +92,7 @@ export async function POST(req: NextRequest) {
         ...(payload.session_id ? { session_id: payload.session_id } : {}),
         ...(payload.workdir ? { workdir: payload.workdir } : {}),
         ...(payload.no_tools !== undefined ? { no_tools: Boolean(payload.no_tools) } : {}),
+        ...(payload.temporary !== undefined ? { temporary: Boolean(payload.temporary) } : {}),
       });
       const ok = status >= 200 && status < 300;
       const run = data as { model?: string | null; usage?: GatewayUsage | null; duration_ms?: number };

@@ -83,7 +83,8 @@ curl -X POST http://localhost:3000/api/chat \
   -d '{"provider": "cerebras", "model": "gpt-oss-120b", "prompt": "Hello!"}'
 ```
 
-- `provider`: `"sea-lion"` (default), `"cerebras"`, `"groq"`, or a local CLI (see below).
+- `provider`: `"sea-lion"` (default), `"cerebras"`, `"groq"`, a local CLI, or `"chatgpt"` (both
+  below).
 - `model`: any model id the chosen provider supports. If omitted, falls back to
   `SEA_LION_MODEL`/`CEREBRAS_MODEL`/`GROQ_MODEL` from `.env`, or each provider's built-in default.
 
@@ -199,6 +200,32 @@ CLI, how much of each subscription limit is left (`remaining_fraction`) and when
 (`resets_at`), from the CLIs that can say: Claude Code (`claude -p /usage`: the 5-hour session
 and the weekly limits) and Antigravity (`agy -p /quota`), neither of which uses any of it. Shown
 under Analytics → Plan limits and on the dashboard's CLI cards. Cached 2–5 minutes.
+
+## ChatGPT on the web (`chatgpt`)
+
+`provider: "chatgpt"` answers through chatgpt.com itself: [`chatgpt-web-gateway`](../chatgpt-web)
+types the prompt into ChatGPT in its own Chrome window, signed in to your ChatGPT account, and reads
+the reply back as Markdown. It speaks local-agent-gateway's API, so it works like the CLIs above —
+same `/api/chat` and `/api/chat/stream`, same response shape, same usage ledger and dashboard card —
+at its own address (`CHATGPT_WEB_URL`/`CHATGPT_WEB_TOKEN` in `.env`, default
+`http://127.0.0.1:8789`). Setup (sign-in, starting it) is in its README.
+
+```bash
+curl -X POST http://localhost:3000/api/chat \
+  -H "Authorization: Bearer $APP_API_KEY" -H "Content-Type: application/json" \
+  -d '{"provider": "chatgpt", "prompt": "Explain CORS in two sentences."}'
+```
+
+- `model`: `auto` (default: whatever the account's plan gives) or `think` (ChatGPT's Think on).
+- `temporary`: default `true`, a temporary chat kept out of the account's history. It can't be
+  continued, so `session_id` comes back `null`. Send `false` to save the chat and get a
+  `session_id`; send that back to continue it. The Playground does this.
+- No `workdir`/`no_tools`, no images, and no token counts (`usage: null`).
+- One prompt at a time; others wait up to the gateway's `QUEUE_TIMEOUT_S`, then get 429.
+- It's ChatGPT's website, not an API: OpenAI's terms forbid automatically extracting its output, so
+  the account can be limited or banned, and replies count against the plan's limits. It breaks when
+  the page changes. When ChatGPT shows a check or signs out, requests fail with 503 until someone
+  deals with it in that Chrome window; the gateway doesn't get around checks.
 
 ## How key rotation works
 

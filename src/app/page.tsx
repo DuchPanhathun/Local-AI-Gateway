@@ -91,6 +91,7 @@ type LocalAgentProviderHealth = {
   supports_resume?: boolean;
   supports_images?: boolean;
   supports_no_tools?: boolean;
+  error?: string | null; // set when this provider's gateway couldn't be reached
 };
 
 type LocalAgentHealth = {
@@ -118,7 +119,10 @@ type ProviderPlanLimits = {
 };
 
 const CLOUD_PROVIDERS = ["sea-lion", "cerebras", "groq"] as const;
-const LOCAL_PROVIDERS = ["claude", "codex", "gemini", "antigravity"] as const;
+// chatgpt isn't a CLI: chatgpt-web-gateway answers through chatgpt.com in a
+// signed-in Chrome window. It speaks local-agent-gateway's API, so it's listed
+// and called like the CLIs.
+const LOCAL_PROVIDERS = ["claude", "codex", "gemini", "antigravity", "chatgpt"] as const;
 type ChatProvider =
   | (typeof CLOUD_PROVIDERS)[number]
   | (typeof LOCAL_PROVIDERS)[number];
@@ -131,10 +135,15 @@ const PROVIDER_LABELS: Record<ChatProvider, string> = {
   codex: "Codex",
   gemini: "Gemini CLI",
   antigravity: "Antigravity",
+  chatgpt: "ChatGPT (web)",
 };
 
 function isCloudProvider(p: ChatProvider): boolean {
   return (CLOUD_PROVIDERS as readonly string[]).includes(p);
+}
+
+function localKind(p: ChatProvider): string {
+  return p === "chatgpt" ? "ChatGPT website" : "Local CLI";
 }
 
 // Sentinel <select> value: the model id is typed into a text field instead.
@@ -1027,7 +1036,12 @@ export default function Dashboard() {
           prompt,
           ...(model ? { model } : {}),
           ...(chatSessionId ? { session_id: chatSessionId } : {}),
-          ...(chatWorkdir.trim() ? { workdir: chatWorkdir.trim() } : {}),
+          // ChatGPT's temporary chats can't be continued: save it so the next turn can.
+          ...(chatProvider === "chatgpt"
+            ? { temporary: false }
+            : chatWorkdir.trim()
+              ? { workdir: chatWorkdir.trim() }
+              : {}),
         };
 
     setChatMessages((prev) => [...prev, { role: "user", content: prompt }]);
@@ -1640,7 +1654,7 @@ export default function Dashboard() {
           const tight = tightestLimit(p);
           const status = off
             ? { label: "Paused", cls: styles.badgeWarning }
-            : localAgentError
+            : localAgentError || h?.error
               ? { label: "Gateway down", cls: styles.badgeDanger }
               : !h
                 ? { label: "Checking…", cls: "" }
@@ -1654,13 +1668,13 @@ export default function Dashboard() {
             >
               <div className={styles.providerHead}>
                 <span className={styles.providerIcon}>
-                  <Icon name="terminal" />
+                  <Icon name={p === "chatgpt" ? "monitor" : "terminal"} />
                 </span>
                 <div>
                   <div className={styles.providerName}>
                     {PROVIDER_LABELS[p]}
                   </div>
-                  <div className={styles.providerKind}>Local CLI</div>
+                  <div className={styles.providerKind}>{localKind(p)}</div>
                 </div>
                 <span
                   className={`${styles.badge} ${status.cls} ${styles.providerStatus}`}
@@ -2065,6 +2079,13 @@ export default function Dashboard() {
                 </>
               )}
             </>
+          ) : chatProvider === "chatgpt" ? (
+            <p className={styles.sidebarHint}>
+              Answered by chatgpt.com in the gateway&apos;s Chrome window. This
+              conversation is saved to the ChatGPT account&apos;s history so
+              later turns can continue it. Model <code>think</code> turns on
+              ChatGPT&apos;s Think.
+            </p>
           ) : (
             <>
               <div className={styles.field}>
@@ -2593,7 +2614,7 @@ export default function Dashboard() {
                       </span>
                     </td>
                     <td className={styles.dim}>
-                      {isCloudProvider(p) ? "Cloud API" : "Local CLI"}
+                      {isCloudProvider(p) ? "Cloud API" : localKind(p)}
                     </td>
                     <td>
                       <span
@@ -2688,7 +2709,8 @@ export default function Dashboard() {
                 Optional, default <code>sea-lion</code>. Cloud:{" "}
                 <code>sea-lion</code>, <code>cerebras</code>, <code>groq</code>.
                 Local CLIs: <code>claude</code>, <code>codex</code>,{" "}
-                <code>gemini</code>, <code>antigravity</code>.
+                <code>gemini</code>, <code>antigravity</code>. ChatGPT website:{" "}
+                <code>chatgpt</code>.
               </td>
             </tr>
             <tr>
@@ -2711,7 +2733,16 @@ export default function Dashboard() {
               <td className={styles.mono}>session_id, workdir</td>
               <td className={styles.dim}>
                 Local CLIs only: resume an earlier session, and the directory
-                the CLI may read.
+                the CLI may read. <code>chatgpt</code> takes session_id only.
+              </td>
+            </tr>
+            <tr>
+              <td className={styles.mono}>temporary</td>
+              <td className={styles.dim}>
+                <code>chatgpt</code> only. Default <code>true</code>: a
+                temporary chat, kept out of the account&apos;s history, that
+                can&apos;t be continued. <code>false</code> saves it and
+                returns a session_id.
               </td>
             </tr>
             <tr>
@@ -2744,7 +2775,9 @@ export default function Dashboard() {
           Real coding-CLI subprocesses on this machine, run by
           local-agent-gateway with read access to an allowlisted working
           directory. Installed isn&apos;t the same as signed in — each CLI
-          needs its own login on this machine.
+          needs its own login on this machine. ChatGPT (web) is
+          chatgpt-web-gateway instead: chatgpt.com in its own signed-in
+          Chrome window (installed here means Chrome is).
         </p>
 
         {localAgentError && (
@@ -2778,10 +2811,11 @@ export default function Dashboard() {
                     <td>
                       <span
                         className={`${styles.badge} ${
-                          p.installed ? styles.badgeSuccess : ""
+                          p.installed ? styles.badgeSuccess : p.error ? styles.badgeDanger : ""
                         }`}
+                        title={p.error ?? undefined}
                       >
-                        {p.installed ? "Installed" : "Not installed"}
+                        {p.installed ? "Installed" : p.error ? "Gateway down" : "Not installed"}
                       </span>
                     </td>
                     <td className={styles.dim}>{p.version ?? "—"}</td>
