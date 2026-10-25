@@ -153,6 +153,49 @@ export async function image(req: ImageRequest): Promise<GatewayCallResult> {
   return { status: res.status, data: await res.json() };
 }
 
+// Text to speech and speech to text on the websites' speech pages (MiMo
+// Studio's TTS and ASR models), through chatgpt-web-gateway.
+export type SpeechRequest = {
+  provider?: "mimo";
+  model?: string; // mimo-v2.5-tts (default), -tts-voicedesign, -tts-voiceclone
+  input: string;
+  voice?: string; // tts: one of GET /voices
+  instructions?: string; // tts: the style; voicedesign: the voice, described
+  reference_audio_base64?: string; // voiceclone: the voice to copy
+  voice_consent?: boolean; // voiceclone: ticks MiMo's voiceprint-upload consent for this request
+};
+
+export type WebTranscriptionRequest = {
+  provider?: "mimo";
+  model?: string; // mimo-v2.5-asr
+  audio_base64: string;
+  filename?: string;
+};
+
+async function postTo(gateway: Gateway, path: string, body: unknown): Promise<GatewayCallResult> {
+  const res = await fetch(`${gateway.url}${path}`, {
+    method: "POST",
+    headers: authHeaders(gateway, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, data: await res.json() };
+}
+
+// Answers { audio_base64, mime_type, voice, ... } (MiMo: WAV).
+export async function speech(req: SpeechRequest): Promise<GatewayCallResult> {
+  return postTo(chatgptWebGateway(), "/speech", req);
+}
+
+// Answers { text, ... }.
+export async function transcribeOnWeb(req: WebTranscriptionRequest): Promise<GatewayCallResult> {
+  return postTo(chatgptWebGateway(), "/transcribe", req);
+}
+
+// The speech and transcription models, and the voices, per site.
+export async function voices(): Promise<GatewayCallResult> {
+  return getFrom(chatgptWebGateway(), "/voices");
+}
+
 async function getFrom(gateway: Gateway, path: string): Promise<GatewayCallResult> {
   try {
     const res = await fetch(`${gateway.url}${path}`, { headers: authHeaders(gateway) });

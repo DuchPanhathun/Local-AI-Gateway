@@ -2207,8 +2207,8 @@ export default function Dashboard() {
       </div>
       <p className={styles.sectionDesc}>
         A token can call <code>/api/chat</code>, <code>/api/chat/stream</code>,{" "}
-        <code>/api/image</code>, <code>/api/transcribe</code> and{" "}
-        <code>/api/models</code> — nothing else. Give one to each app instead
+        <code>/api/image</code>, <code>/api/transcribe</code>,{" "}
+        <code>/api/speech</code> and <code>/api/models</code> — nothing else. Give one to each app instead
         of sharing your APP_API_KEY, and revoke it when that app no longer
         needs access.
       </p>

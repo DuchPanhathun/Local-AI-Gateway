@@ -156,6 +156,39 @@ least 10 seconds of audio. A key that answers 429 is skipped for the next one; w
 caller gets the 429 with a `Retry-After` header, the shortest wait any key asked for. The dashboard counts
 Whisper requests per key, next to chat.
 
+**MiMo instead of Whisper**: add `-F provider=mimo` and the file goes to MiMo Studio's MiMo-V2.5-ASR page
+through [`chatgpt-web-gateway`](../chatgpt-web) (noisy audio, several speakers, dialects; up to 10 MB and
+90 s). The answer is `{"provider": "mimo", "model": "mimo-v2.5-asr", "text": "…", "duration_ms": …}`;
+the other fields are ignored.
+
+## Text-to-speech
+
+`POST /api/speech` speaks text through MiMo Studio's speech pages (via
+[`chatgpt-web-gateway`](../chatgpt-web)), shaped like OpenAI's `/audio/speech`: JSON in, the audio file out
+(WAV, 24 kHz mono).
+
+```bash
+curl -X POST http://localhost:3000/api/speech \
+  -H "Authorization: Bearer $APP_API_KEY" -H "Content-Type: application/json" \
+  -d '{"input": "Good evening!", "voice": "Dean", "instructions": "Calm, like a radio host."}' \
+  -o evening.wav
+```
+
+- `input` (required): the text, up to 1,024 characters.
+- `model`: `mimo-v2.5-tts` (default) speaks in one of its voices; `mimo-v2.5-tts-voicedesign` in a new
+  voice you describe in `instructions`; `mimo-v2.5-tts-voiceclone` in the voice of a 5–30 s recording.
+- `voice` (`mimo-v2.5-tts`): Bingtang (冰糖), Mia, Moli (茉莉), Chloe, Suda (苏打), Milo, Baihua (白桦) or
+  Dean; default Bingtang. `GET /api/speech` lists them with the models.
+- `instructions`: the speaking style (`mimo-v2.5-tts`) or the voice to create (`mimo-v2.5-tts-voicedesign`).
+- `reference_audio_base64` and `voice_consent: true` (`mimo-v2.5-tts-voiceclone`): the recording to copy,
+  under 10 MB, and your go-ahead for MiMo's "I consent to uploading audio voiceprints for VoiceClone",
+  which the gateway ticks only when a request says so. Only copy voices you have the right to use.
+- `response_format: "json"` answers `{"audio_base64", "mime_type", "voice", "duration_ms", …}` instead of
+  the file. The file's response carries `X-Model`, `X-Voice` (URL-encoded) and `X-Duration-Ms` headers.
+
+Speech, MiMo transcription and `mimo` chat share one MiMo tab, so they take turns; each takes about 5–15 s.
+Every one is saved to the MiMo account's history.
+
 ## Local agent CLIs (Claude Code, Codex, Gemini, Antigravity)
 
 `provider: "claude" | "codex" | "gemini" | "antigravity"` routes through the same `/api/chat` —
@@ -300,7 +333,8 @@ CLI and model used today) and `paused`.
 
 A paused provider turns every request away with HTTP 503 — from the Playground and from apps using
 access tokens alike — until you resume it; its keys and CLI login are left alone. Pausing Groq also
-pauses `/api/transcribe`, and pausing Codex pauses `/api/image`. Pause and resume from **Manage**,
+pauses `/api/transcribe` (MiMo's has its own pause: `mimo`, which also pauses `/api/speech`), and pausing
+Codex pauses `/api/image`. Pause and resume from **Manage**,
 or with the owner key:
 
 ```bash
@@ -315,7 +349,7 @@ curl -X PATCH http://localhost:3000/api/providers \
 
 **Access tokens** are separate, revocable credentials you can hand out to other apps/people
   instead of your `APP_API_KEY`. A generated token can call `/api/chat`, `/api/chat/stream`,
-  `/api/image`, `/api/transcribe` and `/api/models`, and *nothing else* — it cannot log into the home page (`/`),
+  `/api/image`, `/api/transcribe`, `/api/speech` and `/api/models`, and *nothing else* — it cannot log into the home page (`/`),
   view quotas or CLI health, list other tokens, or generate more tokens. Only `APP_API_KEY`
   (i.e. only you) can do that. The full token value is shown once, at creation time, then only a
   masked version (`sk-ai-thun-ab12…cd34`) is shown afterward. Revoke any token instantly from the

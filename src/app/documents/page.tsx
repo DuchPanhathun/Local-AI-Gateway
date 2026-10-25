@@ -29,6 +29,7 @@ const NAV: NavGroup[] = [
       { id: "models", label: "Models" },
       { id: "images", label: "Image generation" },
       { id: "transcribe", label: "Speech to text" },
+      { id: "speech", label: "Text to speech" },
       { id: "usage", label: "Usage" },
       { id: "quotas", label: "Quotas" },
       { id: "providers", label: "Pause & resume" },
@@ -265,6 +266,12 @@ const TRANSCRIBE_CURL = `curl "$AI_THUN_URL/api/transcribe" \\
   -F language=en`;
 
 const TRANSCRIBE_RESPONSE = `{ "text": " Let's start with the budget.", "x_groq": { "id": "req_…" } }`;
+
+const SPEECH_CURL = `curl "$AI_THUN_URL/api/speech" \\
+  -H "Authorization: Bearer $AI_THUN_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"input": "Good evening!", "voice": "Dean", "instructions": "Calm, like a radio host."}' \\
+  -o evening.wav`;
 
 const USAGE_CURL = `curl "$AI_THUN_URL/api/usage?month=2026-10" -H "Authorization: Bearer $APP_API_KEY"`;
 
@@ -672,8 +679,8 @@ export default function DocumentsPage() {
               head={["Endpoint", "Owner key", "Access token"]}
               rows={[
                 [<code key="e">POST /api/chat, /api/chat/stream</code>, <Yes key="o" />, <Yes key="t" />],
-                [<code key="e">POST /api/image, /api/transcribe</code>, <Yes key="o" />, <Yes key="t" />],
-                [<code key="e">GET /api/models</code>, <Yes key="o" />, <Yes key="t" />],
+                [<code key="e">POST /api/image, /api/transcribe, /api/speech</code>, <Yes key="o" />, <Yes key="t" />],
+                [<code key="e">GET /api/models, /api/speech</code>, <Yes key="o" />, <Yes key="t" />],
                 [<code key="e">GET /api/usage, /api/quotas</code>, <Yes key="o" />, <No key="t" />],
                 [<code key="e">GET, PATCH /api/providers</code>, <Yes key="o" />, <No key="t" />],
                 [<code key="e">GET, POST, DELETE /api/tokens</code>, <Yes key="o" />, <No key="t" />],
@@ -849,14 +856,49 @@ export default function DocumentsPage() {
                 ["prompt", "string", "Words or spellings to expect."],
                 ["response_format", "string", <><code>json</code> (default), <code>verbose_json</code> or <code>text</code>.</>],
                 ["temperature", "number", "As in OpenAI’s API."],
+                ["provider", "string", <><code>groq</code> (default) or <code>mimo</code>: MiMo Studio’s MiMo-V2.5-ASR, below.</>],
               ]}
             />
             <CodeBlock code={TRANSCRIBE_CURL} label="Request" />
             <CodeBlock code={TRANSCRIBE_RESPONSE} label="Response" />
             <p>
+              With <code>provider=mimo</code> the file goes to MiMo Studio’s speech recognition page
+              through chatgpt-web-gateway instead (noisy audio, several speakers, dialects; up to 10 MB
+              and 90 seconds), and the answer is{" "}
+              <code>{`{"provider": "mimo", "model": "mimo-v2.5-asr", "text": "…"}`}</code>. Its other
+              fields are ignored, and pausing MiMo pauses it.
+            </p>
+            <p>
               Groq allows 20 transcriptions a minute and 2,000 a day per key. A key that’s at its
               limit is skipped for the next one; if every key is, the answer is <code>429</code>{" "}
               with a <code>Retry-After</code> header. Pausing Groq pauses this endpoint too.
+            </p>
+          </Section>
+
+          <Section id="speech" title="Text to speech">
+            <Endpoint method="POST" path="/api/speech" />
+            <p>
+              Speaks text through MiMo Studio’s speech pages, via chatgpt-web-gateway. It takes JSON
+              like OpenAI’s <code>/audio/speech</code> and answers with the audio file (WAV, 24 kHz
+              mono). <code>GET /api/speech</code> lists the models and voices.
+            </p>
+            <Fields
+              rows={[
+                ["input", "string", "The text, up to 1,024 characters.", true],
+                ["model", "string", <><code>mimo-v2.5-tts</code> (default): one of its voices. <code>mimo-v2.5-tts-voicedesign</code>: a voice you describe. <code>mimo-v2.5-tts-voiceclone</code>: the voice of a recording.</>],
+                ["voice", "string", <>For <code>mimo-v2.5-tts</code>: Bingtang (冰糖, default), Mia, Moli (茉莉), Chloe, Suda (苏打), Milo, Baihua (白桦) or Dean.</>],
+                ["instructions", "string", "The speaking style, or for voicedesign the voice to create."],
+                ["reference_audio_base64", "string", "For voiceclone: a 5–30 s recording under 10 MB, base64-encoded."],
+                ["voice_consent", "boolean", <>For voiceclone, required <code>true</code>: ticks MiMo’s consent to uploading the recording’s voiceprint. Only copy voices you have the right to use.</>],
+                ["response_format", "string", <><code>json</code> answers the audio base64-encoded, with its type and voice, instead of the file.</>],
+              ]}
+            />
+            <CodeBlock code={SPEECH_CURL} label="Request: saves the audio as evening.wav" />
+            <p>
+              The file’s response carries <code>X-Model</code>, <code>X-Voice</code> (URL-encoded) and{" "}
+              <code>X-Duration-Ms</code> headers. Each takes about 5–15 seconds, and speech, MiMo
+              transcription and MiMo chat take turns on one MiMo tab. Every one is saved to the MiMo
+              account’s history; pausing MiMo pauses this endpoint.
             </p>
           </Section>
 
