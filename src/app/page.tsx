@@ -119,10 +119,11 @@ type ProviderPlanLimits = {
 };
 
 const CLOUD_PROVIDERS = ["sea-lion", "cerebras", "groq"] as const;
-// chatgpt isn't a CLI: chatgpt-web-gateway answers through chatgpt.com in a
-// signed-in Chrome window. It speaks local-agent-gateway's API, so it's listed
-// and called like the CLIs.
-const LOCAL_PROVIDERS = ["claude", "codex", "gemini", "antigravity", "chatgpt"] as const;
+// chatgpt and grok aren't CLIs: chatgpt-web-gateway answers through chatgpt.com
+// and grok.com in a signed-in Chrome window. It speaks local-agent-gateway's API,
+// so they're listed and called like the CLIs.
+const LOCAL_PROVIDERS = ["claude", "codex", "gemini", "antigravity", "chatgpt", "grok"] as const;
+const WEB_PROVIDERS: readonly string[] = ["chatgpt", "grok"];
 type ChatProvider =
   | (typeof CLOUD_PROVIDERS)[number]
   | (typeof LOCAL_PROVIDERS)[number];
@@ -136,14 +137,19 @@ const PROVIDER_LABELS: Record<ChatProvider, string> = {
   gemini: "Gemini CLI",
   antigravity: "Antigravity",
   chatgpt: "ChatGPT (web)",
+  grok: "Grok (web)",
 };
 
 function isCloudProvider(p: ChatProvider): boolean {
   return (CLOUD_PROVIDERS as readonly string[]).includes(p);
 }
 
+function isWebProvider(p: ChatProvider): boolean {
+  return WEB_PROVIDERS.includes(p);
+}
+
 function localKind(p: ChatProvider): string {
-  return p === "chatgpt" ? "ChatGPT website" : "Local CLI";
+  return isWebProvider(p) ? "Website" : "Local CLI";
 }
 
 // Sentinel <select> value: the model id is typed into a text field instead.
@@ -1036,8 +1042,8 @@ export default function Dashboard() {
           prompt,
           ...(model ? { model } : {}),
           ...(chatSessionId ? { session_id: chatSessionId } : {}),
-          // ChatGPT's temporary chats can't be continued: save it so the next turn can.
-          ...(chatProvider === "chatgpt"
+          // Temporary/private web chats can't be continued: save it so the next turn can.
+          ...(isWebProvider(chatProvider)
             ? { temporary: false }
             : chatWorkdir.trim()
               ? { workdir: chatWorkdir.trim() }
@@ -1668,7 +1674,7 @@ export default function Dashboard() {
             >
               <div className={styles.providerHead}>
                 <span className={styles.providerIcon}>
-                  <Icon name={p === "chatgpt" ? "monitor" : "terminal"} />
+                  <Icon name={isWebProvider(p) ? "monitor" : "terminal"} />
                 </span>
                 <div>
                   <div className={styles.providerName}>
@@ -2079,12 +2085,21 @@ export default function Dashboard() {
                 </>
               )}
             </>
-          ) : chatProvider === "chatgpt" ? (
+          ) : isWebProvider(chatProvider) ? (
             <p className={styles.sidebarHint}>
-              Answered by chatgpt.com in the gateway&apos;s Chrome window. This
-              conversation is saved to the ChatGPT account&apos;s history so
-              later turns can continue it. Model <code>think</code> turns on
-              ChatGPT&apos;s Think.
+              Answered by {chatProvider === "grok" ? "grok.com" : "chatgpt.com"}{" "}
+              in the gateway&apos;s Chrome window. This conversation is saved to
+              the account&apos;s history so later turns can continue it.{" "}
+              {chatProvider === "grok" ? (
+                <>
+                  The free plan has model <code>fast</code> only, which reasons
+                  for 10–35 s before answering.
+                </>
+              ) : (
+                <>
+                  Model <code>think</code> turns on ChatGPT&apos;s Think.
+                </>
+              )}
             </p>
           ) : (
             <>
@@ -2709,8 +2724,8 @@ export default function Dashboard() {
                 Optional, default <code>sea-lion</code>. Cloud:{" "}
                 <code>sea-lion</code>, <code>cerebras</code>, <code>groq</code>.
                 Local CLIs: <code>claude</code>, <code>codex</code>,{" "}
-                <code>gemini</code>, <code>antigravity</code>. ChatGPT website:{" "}
-                <code>chatgpt</code>.
+                <code>gemini</code>, <code>antigravity</code>. Websites:{" "}
+                <code>chatgpt</code>, <code>grok</code>.
               </td>
             </tr>
             <tr>
@@ -2733,16 +2748,17 @@ export default function Dashboard() {
               <td className={styles.mono}>session_id, workdir</td>
               <td className={styles.dim}>
                 Local CLIs only: resume an earlier session, and the directory
-                the CLI may read. <code>chatgpt</code> takes session_id only.
+                the CLI may read. <code>chatgpt</code> and <code>grok</code>{" "}
+                take session_id only.
               </td>
             </tr>
             <tr>
               <td className={styles.mono}>temporary</td>
               <td className={styles.dim}>
-                <code>chatgpt</code> only. Default <code>true</code>: a
-                temporary chat, kept out of the account&apos;s history, that
-                can&apos;t be continued. <code>false</code> saves it and
-                returns a session_id.
+                <code>chatgpt</code> and <code>grok</code> only. Default{" "}
+                <code>true</code>: a temporary (ChatGPT) or private (Grok) chat,
+                kept out of the account&apos;s history, that can&apos;t be
+                continued. <code>false</code> saves it and returns a session_id.
               </td>
             </tr>
             <tr>
@@ -2775,9 +2791,9 @@ export default function Dashboard() {
           Real coding-CLI subprocesses on this machine, run by
           local-agent-gateway with read access to an allowlisted working
           directory. Installed isn&apos;t the same as signed in — each CLI
-          needs its own login on this machine. ChatGPT (web) is
-          chatgpt-web-gateway instead: chatgpt.com in its own signed-in
-          Chrome window (installed here means Chrome is).
+          needs its own login on this machine. ChatGPT (web) and Grok (web)
+          are chatgpt-web-gateway instead: chatgpt.com and grok.com in its own
+          signed-in Chrome window (installed here means Chrome is).
         </p>
 
         {localAgentError && (

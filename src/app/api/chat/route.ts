@@ -39,7 +39,7 @@ type ChatRequestBody = {
   session_id?: string;
   workdir?: string;
   no_tools?: boolean;
-  temporary?: boolean; // chatgpt only
+  temporary?: boolean; // chatgpt and grok only
   // Any other OpenAI-compatible field (max_tokens, temperature, response_format,
   // reasoning_effort, chat_template_kwargs, top_p, ...) is forwarded as-is to
   // cloud providers — see the passthrough below. `stream` is deliberately

@@ -83,8 +83,8 @@ curl -X POST http://localhost:3000/api/chat \
   -d '{"provider": "cerebras", "model": "gpt-oss-120b", "prompt": "Hello!"}'
 ```
 
-- `provider`: `"sea-lion"` (default), `"cerebras"`, `"groq"`, a local CLI, or `"chatgpt"` (both
-  below).
+- `provider`: `"sea-lion"` (default), `"cerebras"`, `"groq"`, a local CLI, or `"chatgpt"` /
+  `"grok"` (both below).
 - `model`: any model id the chosen provider supports. If omitted, falls back to
   `SEA_LION_MODEL`/`CEREBRAS_MODEL`/`GROQ_MODEL` from `.env`, or each provider's built-in default.
 
@@ -201,14 +201,15 @@ CLI, how much of each subscription limit is left (`remaining_fraction`) and when
 and the weekly limits) and Antigravity (`agy -p /quota`), neither of which uses any of it. Shown
 under Analytics → Plan limits and on the dashboard's CLI cards. Cached 2–5 minutes.
 
-## ChatGPT on the web (`chatgpt`)
+## ChatGPT and Grok on the web (`chatgpt`, `grok`)
 
-`provider: "chatgpt"` answers through chatgpt.com itself: [`chatgpt-web-gateway`](../chatgpt-web)
-types the prompt into ChatGPT in its own Chrome window, signed in to your ChatGPT account, and reads
-the reply back as Markdown. It speaks local-agent-gateway's API, so it works like the CLIs above —
-same `/api/chat` and `/api/chat/stream`, same response shape, same usage ledger and dashboard card —
-at its own address (`CHATGPT_WEB_URL`/`CHATGPT_WEB_TOKEN` in `.env`, default
-`http://127.0.0.1:8789`). Setup (sign-in, starting it) is in its README.
+`provider: "chatgpt"` and `provider: "grok"` answer through chatgpt.com and grok.com themselves:
+[`chatgpt-web-gateway`](../chatgpt-web) types the prompt into the site in its own Chrome window,
+signed in to your accounts, and reads the reply back as Markdown. It speaks local-agent-gateway's
+API, so they work like the CLIs above — same `/api/chat` and `/api/chat/stream`, same response
+shape, same usage ledger and dashboard cards — at its own address
+(`CHATGPT_WEB_URL`/`CHATGPT_WEB_TOKEN` in `.env`, default `http://127.0.0.1:8789`). Setup (sign-in,
+starting it) is in its README.
 
 ```bash
 curl -X POST http://localhost:3000/api/chat \
@@ -216,16 +217,19 @@ curl -X POST http://localhost:3000/api/chat \
   -d '{"provider": "chatgpt", "prompt": "Explain CORS in two sentences."}'
 ```
 
-- `model`: `auto` (default: whatever the account's plan gives) or `think` (ChatGPT's Think on).
-- `temporary`: default `true`, a temporary chat kept out of the account's history. It can't be
-  continued, so `session_id` comes back `null`. Send `false` to save the chat and get a
-  `session_id`; send that back to continue it. The Playground does this.
+- `model`: chatgpt: `auto` (default: whatever the account's plan gives) or `think` (ChatGPT's Think
+  on). grok: `fast` (default, the free plan's; it reasons 10–35 s before answering), or `auto`,
+  `expert`, `heavy` with SuperGrok.
+- `temporary`: default `true`, ChatGPT's temporary chat or Grok's private chat, kept out of the
+  account's history. It can't be continued, so `session_id` comes back `null`. Send `false` to save
+  the chat and get a `session_id`; send that back to continue it. The Playground does this.
 - No `workdir`/`no_tools`, no images, and no token counts (`usage: null`).
-- One prompt at a time; others wait up to the gateway's `QUEUE_TIMEOUT_S`, then get 429.
-- It's ChatGPT's website, not an API: OpenAI's terms forbid automatically extracting its output, so
-  the account can be limited or banned, and replies count against the plan's limits. It breaks when
-  the page changes. When ChatGPT shows a check or signs out, requests fail with 503 until someone
-  deals with it in that Chrome window; the gateway doesn't get around checks.
+- One prompt at a time per site (ChatGPT and Grok can answer at once); others wait up to the
+  gateway's `QUEUE_TIMEOUT_S`, then get 429.
+- These are websites, not APIs: OpenAI's and xAI's terms don't allow automated use, so the accounts
+  can be limited or banned, and replies count against the plans' limits. They break when a page
+  changes. When a site shows a check, an age question or signs out, requests fail with 503 until
+  someone deals with it in that Chrome window; the gateway doesn't get around checks.
 
 ## How key rotation works
 

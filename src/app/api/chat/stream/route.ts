@@ -41,7 +41,7 @@ type StreamRequestBody = {
   session_id?: string;
   workdir?: string;
   no_tools?: boolean;
-  temporary?: boolean; // chatgpt only
+  temporary?: boolean; // chatgpt and grok only
   // cloud providers: any other OpenAI-compatible field (max_tokens,
   // temperature, chat_template_kwargs, ...) is forwarded as-is.
   [key: string]: unknown;

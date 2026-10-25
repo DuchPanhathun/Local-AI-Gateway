@@ -640,7 +640,8 @@ export default function DocumentsPage() {
                 ["Codex", <code key="v">codex</code>, "Local CLI", <span key="m" className={styles.muted}>The CLI’s own default</span>],
                 ["Gemini CLI", <code key="v">gemini</code>, "Local CLI", <span key="m" className={styles.muted}>The CLI’s own default</span>],
                 ["Antigravity", <code key="v">antigravity</code>, "Local CLI", <span key="m" className={styles.muted}>The CLI’s own default</span>],
-                ["ChatGPT (web)", <code key="v">chatgpt</code>, "ChatGPT website", <code key="m">auto</code>],
+                ["ChatGPT (web)", <code key="v">chatgpt</code>, "Website", <code key="m">auto</code>],
+                ["Grok (web)", <code key="v">grok</code>, "Website", <code key="m">fast</code>],
               ]}
             />
             <p>

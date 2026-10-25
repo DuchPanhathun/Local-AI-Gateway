@@ -5,13 +5,14 @@
 // access to an allowlisted workdir — that's local-agent-gateway's job to enforce,
 // not ours. We just proxy.
 //
-// The `chatgpt` provider is chatgpt-web-gateway (../chatgpt-web) instead, another
-// local service: it answers through chatgpt.com in its own signed-in Chrome
-// window. It speaks the same API, so it's called the same way at its own address.
+// The `chatgpt` and `grok` providers are chatgpt-web-gateway (../chatgpt-web)
+// instead, another local service: it answers through chatgpt.com and grok.com in
+// its own signed-in Chrome window. It speaks the same API, so it's called the
+// same way at its own address.
 
 import { getDayUsage, recordUsageEvent, todayUTC } from "./usage-ledger";
 
-export type LocalAgentProviderId = "claude" | "codex" | "gemini" | "antigravity" | "chatgpt";
+export type LocalAgentProviderId = "claude" | "codex" | "gemini" | "antigravity" | "chatgpt" | "grok";
 
 export const LOCAL_AGENT_PROVIDER_IDS: LocalAgentProviderId[] = [
   "claude",
@@ -19,6 +20,7 @@ export const LOCAL_AGENT_PROVIDER_IDS: LocalAgentProviderId[] = [
   "gemini",
   "antigravity",
   "chatgpt",
+  "grok",
 ];
 
 export function isLocalAgentProviderId(value: string): value is LocalAgentProviderId {
@@ -58,12 +60,16 @@ function chatgptWebGateway(): Gateway {
     name: "chatgpt-web-gateway",
     url: process.env.CHATGPT_WEB_URL || "http://127.0.0.1:8789",
     tokenVar: "CHATGPT_WEB_TOKEN",
-    providers: ["chatgpt"],
+    providers: ["chatgpt", "grok"],
   };
 }
 
+function isWebChat(provider: LocalAgentProviderId): boolean {
+  return chatgptWebGateway().providers.includes(provider);
+}
+
 function gatewayFor(provider: LocalAgentProviderId): Gateway {
-  return provider === "chatgpt" ? chatgptWebGateway() : localAgentGateway();
+  return isWebChat(provider) ? chatgptWebGateway() : localAgentGateway();
 }
 
 function authHeaders(gateway: Gateway, extra?: Record<string, string>): Record<string, string> {
@@ -81,7 +87,7 @@ export type AskRequest = {
   session_id?: string;
   workdir?: string; // CLIs only
   no_tools?: boolean; // CLIs only
-  temporary?: boolean; // chatgpt only: false saves the chat so session_id can continue it
+  temporary?: boolean; // chatgpt and grok only: false saves the chat so session_id can continue it
 };
 
 export type GatewayCallResult = { status: number; data: unknown };
@@ -90,7 +96,7 @@ export type GatewayCallResult = { status: number; data: unknown };
 function askBody(req: AskRequest): string {
   const { workdir, no_tools, temporary, ...common } = req;
   return JSON.stringify(
-    req.provider === "chatgpt"
+    isWebChat(req.provider)
       ? { ...common, ...(temporary !== undefined ? { temporary } : {}) }
       : { ...common, ...(workdir ? { workdir } : {}), ...(no_tools !== undefined ? { no_tools } : {}) }
   );
