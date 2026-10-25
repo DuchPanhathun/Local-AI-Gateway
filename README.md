@@ -84,7 +84,7 @@ curl -X POST http://localhost:3000/api/chat \
 ```
 
 - `provider`: `"sea-lion"` (default), `"cerebras"`, `"groq"`, a local CLI, or `"chatgpt"` /
-  `"grok"` (both below).
+  `"grok"` / `"mimo"` (both below).
 - `model`: any model id the chosen provider supports. If omitted, falls back to
   `SEA_LION_MODEL`/`CEREBRAS_MODEL`/`GROQ_MODEL` from `.env`, or each provider's built-in default.
 
@@ -201,9 +201,10 @@ CLI, how much of each subscription limit is left (`remaining_fraction`) and when
 and the weekly limits) and Antigravity (`agy -p /quota`), neither of which uses any of it. Shown
 under Analytics → Plan limits and on the dashboard's CLI cards. Cached 2–5 minutes.
 
-## ChatGPT and Grok on the web (`chatgpt`, `grok`)
+## ChatGPT, Grok and MiMo on the web (`chatgpt`, `grok`, `mimo`)
 
-`provider: "chatgpt"` and `provider: "grok"` answer through chatgpt.com and grok.com themselves:
+`provider: "chatgpt"`, `"grok"` and `"mimo"` answer through chatgpt.com, grok.com and Xiaomi MiMo
+Studio (aistudio.xiaomimimo.com) themselves:
 [`chatgpt-web-gateway`](../chatgpt-web) types the prompt into the site in its own Chrome window,
 signed in to your accounts, and reads the reply back as Markdown. It speaks local-agent-gateway's
 API, so they work like the CLIs above — same `/api/chat` and `/api/chat/stream`, same response
@@ -219,14 +220,18 @@ curl -X POST http://localhost:3000/api/chat \
 
 - `model`: chatgpt: `auto` (default: whatever the account's plan gives) or `think` (ChatGPT's Think
   on). grok: `fast` (default, the free plan's; it reasons 10–35 s before answering), or `auto`,
-  `expert`, `heavy` with SuperGrok.
+  `expert`, `heavy` with SuperGrok. mimo: `mimo-v2.6-pro` (default) or `mimo-v2.6-flash`; MiMo's
+  reasoning streams as `thinking` events. (MiMo Studio's TTS and ASR models take or give audio, which
+  this endpoint doesn't carry.)
 - `temporary`: default `true`, ChatGPT's temporary chat or Grok's private chat, kept out of the
   account's history. It can't be continued, so `session_id` comes back `null`. Send `false` to save
-  the chat and get a `session_id`; send that back to continue it. The Playground does this.
+  the chat and get a `session_id`; send that back to continue it. The Playground does this. MiMo
+  has no such chats: every `mimo` chat is saved and returns a `session_id`.
 - No `workdir`/`no_tools`, no images, and no token counts (`usage: null`).
-- One prompt at a time per site (ChatGPT and Grok can answer at once); others wait up to the
-  gateway's `QUEUE_TIMEOUT_S`, then get 429.
-- These are websites, not APIs: OpenAI's and xAI's terms don't allow automated use, so the accounts
+- One prompt at a time per site (the three can answer at once); others wait up to the gateway's
+  `QUEUE_TIMEOUT_S`, then get 429.
+- MiMo shows links in its answers without their addresses, so they come back as plain text.
+- These are websites, not APIs: their makers' terms don't allow automated use, so the accounts
   can be limited or banned, and replies count against the plans' limits. They break when a page
   changes. When a site shows a check, an age question or signs out, requests fail with 503 until
   someone deals with it in that Chrome window; the gateway doesn't get around checks.

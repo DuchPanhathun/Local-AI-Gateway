@@ -5,14 +5,21 @@
 // access to an allowlisted workdir — that's local-agent-gateway's job to enforce,
 // not ours. We just proxy.
 //
-// The `chatgpt` and `grok` providers are chatgpt-web-gateway (../chatgpt-web)
-// instead, another local service: it answers through chatgpt.com and grok.com in
-// its own signed-in Chrome window. It speaks the same API, so it's called the
-// same way at its own address.
+// The `chatgpt`, `grok` and `mimo` providers are chatgpt-web-gateway
+// (../chatgpt-web) instead, another local service: it answers through
+// chatgpt.com, grok.com and Xiaomi MiMo Studio in its own signed-in Chrome
+// window. It speaks the same API, so it's called the same way at its own address.
 
 import { getDayUsage, recordUsageEvent, todayUTC } from "./usage-ledger";
 
-export type LocalAgentProviderId = "claude" | "codex" | "gemini" | "antigravity" | "chatgpt" | "grok";
+export type LocalAgentProviderId =
+  | "claude"
+  | "codex"
+  | "gemini"
+  | "antigravity"
+  | "chatgpt"
+  | "grok"
+  | "mimo";
 
 export const LOCAL_AGENT_PROVIDER_IDS: LocalAgentProviderId[] = [
   "claude",
@@ -21,6 +28,7 @@ export const LOCAL_AGENT_PROVIDER_IDS: LocalAgentProviderId[] = [
   "antigravity",
   "chatgpt",
   "grok",
+  "mimo",
 ];
 
 export function isLocalAgentProviderId(value: string): value is LocalAgentProviderId {
@@ -60,7 +68,7 @@ function chatgptWebGateway(): Gateway {
     name: "chatgpt-web-gateway",
     url: process.env.CHATGPT_WEB_URL || "http://127.0.0.1:8789",
     tokenVar: "CHATGPT_WEB_TOKEN",
-    providers: ["chatgpt", "grok"],
+    providers: ["chatgpt", "grok", "mimo"],
   };
 }
 
@@ -87,7 +95,7 @@ export type AskRequest = {
   session_id?: string;
   workdir?: string; // CLIs only
   no_tools?: boolean; // CLIs only
-  temporary?: boolean; // chatgpt and grok only: false saves the chat so session_id can continue it
+  temporary?: boolean; // web chats only: false saves the chat so session_id can continue it (mimo always saves)
 };
 
 export type GatewayCallResult = { status: number; data: unknown };

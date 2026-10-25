@@ -642,6 +642,7 @@ export default function DocumentsPage() {
                 ["Antigravity", <code key="v">antigravity</code>, "Local CLI", <span key="m" className={styles.muted}>The CLI’s own default</span>],
                 ["ChatGPT (web)", <code key="v">chatgpt</code>, "Website", <code key="m">auto</code>],
                 ["Grok (web)", <code key="v">grok</code>, "Website", <code key="m">fast</code>],
+                ["MiMo (web)", <code key="v">mimo</code>, "Website", <code key="m">mimo-v2.6-pro</code>],
               ]}
             />
             <p>
