@@ -143,6 +143,24 @@ function recordUsage(
   recordUsageEvent(providerId, model, { ...outcome, keyName });
 }
 
+// How much text is in an OpenAI-style message list, for estimating a caller's
+// tokens when the provider doesn't report them.
+function messageChars(messages: unknown): number {
+  if (!Array.isArray(messages)) return 0;
+  let chars = 0;
+  for (const m of messages) {
+    const content = (m as { content?: unknown } | null)?.content;
+    if (typeof content === "string") chars += content.length;
+    else if (Array.isArray(content)) {
+      for (const part of content) {
+        const text = (part as { text?: unknown } | null)?.text;
+        if (typeof text === "string") chars += text.length;
+      }
+    }
+  }
+  return chars;
+}
+
 function getDayTokens(providerId: ProviderId, keyName: string, model: string): number {
   return getKeyDayTokens(providerId, model, keyName, todayUTC());
 }
@@ -159,9 +177,11 @@ function collectKeys(prefix: string): { name: string; key: string }[] {
 
 export type ProviderCallResult = { status: number; data: unknown };
 
+// `caller`: the access token's id, when one made the request.
 export async function callProvider(
   providerId: ProviderId,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  caller?: string
 ): Promise<ProviderCallResult> {
   const config = PROVIDERS[providerId];
   const keys = collectKeys(config.keyEnvPrefix);
@@ -214,11 +234,14 @@ export async function callProvider(
     }
 
     const data: unknown = await res.json();
+    const answer = (data as { choices?: { message?: { content?: unknown } }[] } | null)?.choices?.[0]?.message?.content;
 
     recordUsage(providerId, name, model, {
       status: res.ok ? "ok" : "error",
       usage: (data as { usage?: TokenUsage } | null)?.usage ?? null,
       durationMs: Date.now() - startedAt,
+      caller,
+      textChars: messageChars(body.messages) + (typeof answer === "string" ? answer.length : 0),
     });
 
     cursors.set(providerId, cursor);
@@ -355,7 +378,9 @@ function toEventStream(
   // When the request was sent, not when headers came back — otherwise queue
   // and prompt-processing time vanish from the reported latency.
   startedAt: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  // The access token's id, when one made the request, and its prompt's length.
+  caller?: { id: string; promptChars: number }
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
@@ -477,6 +502,8 @@ function toEventStream(
           status: finished && !upstreamError ? "ok" : stopped ? "stopped" : "error",
           usage: usage ?? null,
           durationMs: Date.now() - startedAt,
+          caller: caller?.id,
+          textChars: (caller?.promptChars ?? 0) + result.length,
         });
       }
     },
@@ -499,7 +526,8 @@ function toEventStream(
 export async function streamProvider(
   providerId: ProviderId,
   body: Record<string, unknown>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  caller?: string
 ): Promise<StreamResult> {
   const config = PROVIDERS[providerId];
   const keys = collectKeys(config.keyEnvPrefix);
@@ -564,13 +592,21 @@ export async function streamProvider(
     if (!res.ok || !res.body) {
       // Counted like callProvider counts it: a rejected request still used
       // one of the key's requests-per-minute.
-      recordUsage(providerId, name, model, { status: "error" });
+      recordUsage(providerId, name, model, { status: "error", caller });
       const data = await res.json().catch(() => null);
       return { ok: false, status: res.status, error: upstreamErrorMessage(data, res.status) };
     }
     return {
       ok: true,
-      stream: toEventStream(providerId, name, model, res.body, startedAt, signal),
+      stream: toEventStream(
+        providerId,
+        name,
+        model,
+        res.body,
+        startedAt,
+        signal,
+        caller ? { id: caller, promptChars: messageChars(body.messages) } : undefined
+      ),
     };
   }
 
@@ -656,7 +692,7 @@ export type TranscriptionResult = {
 // other fields. The answer is passed back as Groq sent it (JSON, or plain text
 // for response_format=text). If every key is rate limited, the result is a 429
 // with the shortest wait any key asked for.
-export async function transcribeWithGroq(form: FormData): Promise<TranscriptionResult> {
+export async function transcribeWithGroq(form: FormData, caller?: string): Promise<TranscriptionResult> {
   const config = PROVIDERS.groq;
   const keys = collectKeys(config.keyEnvPrefix);
   if (keys.length === 0) {
@@ -699,6 +735,7 @@ export async function transcribeWithGroq(form: FormData): Promise<TranscriptionR
     recordUsage("groq", name, model, {
       status: res.ok ? "ok" : "error",
       durationMs: Date.now() - startedAt,
+      caller,
     });
     cursors.set("groq", cursor);
     return {

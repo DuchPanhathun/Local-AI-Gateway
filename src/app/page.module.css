@@ -1069,6 +1069,122 @@
   text-align: center;
 }
 
+/* ---------- API keys ---------- */
+
+.headerActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.keyPanel {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.keyForm {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.fourCol {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.fieldHint {
+  font-size: 0.74rem;
+  color: var(--text-dim);
+  line-height: 1.45;
+  margin-top: -6px;
+}
+
+.field .fieldHint {
+  margin-top: 0;
+}
+
+/* A switch with its label beside it, at the start of the line. */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.82rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.checkChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.checkChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 11px 4px 8px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.checkChip:has(input:checked) {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent-text);
+}
+
+.formActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.quickActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.inlineAmount {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.inlineAmount .input {
+  width: 110px;
+}
+
+.cellNote {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  margin-top: 3px;
+}
+
+.rowSelected,
+.table tbody tr.rowSelected:hover {
+  background: var(--accent-soft);
+}
+
+.dangerText {
+  color: var(--danger-text);
+}
+
+.warningText {
+  color: var(--warning-text);
+}
+
 /* ---------- Progress bars ---------- */
 
 .progressLabel {
@@ -1445,6 +1561,9 @@
 }
 
 @media (max-width: 860px) {
+  .fourCol {
+    grid-template-columns: 1fr 1fr;
+  }
   .appShell {
     flex-direction: column;
   }

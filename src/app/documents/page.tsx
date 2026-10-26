@@ -30,6 +30,7 @@ const NAV: NavGroup[] = [
       { id: "images", label: "Image generation" },
       { id: "transcribe", label: "Speech to text" },
       { id: "speech", label: "Text to speech" },
+      { id: "me", label: "Your key" },
       { id: "usage", label: "Usage" },
       { id: "quotas", label: "Quotas" },
       { id: "providers", label: "Pause & resume" },
@@ -350,21 +351,48 @@ const PAUSE_CURL = `curl -X PATCH "$AI_THUN_URL/api/providers" \\
 
 # → {"paused": ["cerebras"]}`;
 
-const TOKENS_CURL = `# Create one. The full token is shown only in this response.
+const TOKENS_CURL = `# Create one: 1M tokens and 1,000 requests a month, 20 a minute, until the end
+# of Nov 30 (UTC), Groq and Cerebras only. The key is shown only in this response.
 curl -X POST "$AI_THUN_URL/api/tokens" \\
   -H "Authorization: Bearer $APP_API_KEY" \\
   -H "Content-Type: application/json" \\
-  -d '{"label": "news-scraper"}'
-# → {"id": "9f2c41d07ab35e18", "token": "sk-ai-thun-3f9a…", "label": "news-scraper", "createdAt": "2026-10-16T02:14:07.512Z"}
+  -d '{"name": "Dara", "note": "paid 5 USD on Oct 26",
+       "limits": {"period": "month", "tokens": 1000000, "requests": 1000, "perMinute": 20},
+       "expiresAt": "2026-11-30", "providers": ["groq", "cerebras"]}'
+# → {"id": "9f2c41d07ab35e18", "token": "sk-ai-thun-3f9a…", "name": "Dara", "status": "active", …}
 
-# List them (masked)
+# List them, with each one's status and use this period
 curl "$AI_THUN_URL/api/tokens" -H "Authorization: Bearer $APP_API_KEY"
-# → {"tokens": [{"id": "9f2c41d07ab35e18", "label": "news-scraper", "createdAt": "…", "masked": "sk-ai-thun…9c1e"}]}
 
-# Revoke one
+# One key's use in a month, by day and model
+curl "$AI_THUN_URL/api/tokens?id=9f2c41d07ab35e18&month=2026-10" -H "Authorization: Bearer $APP_API_KEY"
+
+# Top it up, give it 30 more days, turn it off, or make it a new secret
+curl -X PATCH "$AI_THUN_URL/api/tokens?id=9f2c41d07ab35e18" \\
+  -H "Authorization: Bearer $APP_API_KEY" -H "Content-Type: application/json" \\
+  -d '{"addTokens": 500000, "extendDays": 30}'
+#    -d '{"disabled": true}'   or   -d '{"rotate": true}'   (the new key comes back in "token")
+
+# Delete one
 curl -X DELETE "$AI_THUN_URL/api/tokens?id=9f2c41d07ab35e18" \\
   -H "Authorization: Bearer $APP_API_KEY"
 # → {"revoked": "9f2c41d07ab35e18"}`;
+
+const ME_CURL = `curl "$AI_THUN_URL/api/me" -H "Authorization: Bearer $AI_THUN_KEY"`;
+
+const ME_RESPONSE = `{
+  "name": "Dara",
+  "hint": "sk-ai-thun-3f9a…9c1e",
+  "status": "active",
+  "expiresAt": "2026-11-30T23:59:59.999Z",
+  "limits": { "period": "month", "tokens": 1000000, "requests": 1000, "perMinute": 20 },
+  "providers": ["groq", "cerebras"],
+  "used": { "requests": 212, "errors": 3, "tokens": 412880, "estimatedTokens": 0 },
+  "remaining": { "tokens": 587120, "requests": 791 },
+  "resetsAt": "2026-11-01T00:00:00.000Z",
+  "total": { "requests": 212, "errors": 3, "tokens": 412880, "estimatedTokens": 0 },
+  …
+}`;
 
 const HEALTH_RESPONSE = `{
   "status": "ok",
@@ -671,8 +699,10 @@ export default function DocumentsPage() {
               </li>
               <li>
                 <strong>Access tokens</strong> (<code>sk-ai-thun-…</code>): created on the
-                console’s <Link href="/">API keys</Link> page, one per app. They can only send
-                requests to providers, and you can revoke each one on its own.
+                console’s <Link href="/">API keys</Link> page, one per app or person. They can
+                only send requests to providers and read their own balance at{" "}
+                <a href="#me">/api/me</a>. Each one can have its own limits, expiry date and
+                providers, and you can turn it off or delete it on its own.
               </li>
             </ul>
             <Table
@@ -680,10 +710,10 @@ export default function DocumentsPage() {
               rows={[
                 [<code key="e">POST /api/chat, /api/chat/stream</code>, <Yes key="o" />, <Yes key="t" />],
                 [<code key="e">POST /api/image, /api/transcribe, /api/speech</code>, <Yes key="o" />, <Yes key="t" />],
-                [<code key="e">GET /api/models, /api/speech</code>, <Yes key="o" />, <Yes key="t" />],
+                [<code key="e">GET /api/models, /api/speech, /api/me</code>, <Yes key="o" />, <Yes key="t" />],
                 [<code key="e">GET /api/usage, /api/quotas</code>, <Yes key="o" />, <No key="t" />],
                 [<code key="e">GET, PATCH /api/providers</code>, <Yes key="o" />, <No key="t" />],
-                [<code key="e">GET, POST, DELETE /api/tokens</code>, <Yes key="o" />, <No key="t" />],
+                [<code key="e">GET, POST, PATCH, DELETE /api/tokens</code>, <Yes key="o" />, <No key="t" />],
                 [<code key="e">GET /api/local-agent/health, /api/local-agent/limits</code>, <Yes key="o" />, <No key="t" />],
               ]}
             />
@@ -902,6 +932,35 @@ export default function DocumentsPage() {
             </p>
           </Section>
 
+          <Section id="me" title="Your key">
+            <Endpoint method="GET" path="/api/me" />
+            <p>
+              The access token you call with: its status (<code>active</code>,{" "}
+              <code>disabled</code>, <code>expired</code> or <code>limited</code>), its limits, what
+              it has used and has left this period, when the period starts over, and when the key
+              expires. It answers even for a key that’s turned off, expired or used up, so you can
+              see why requests are refused. With the owner key it answers{" "}
+              <code>{`{"owner": true}`}</code>.
+            </p>
+            <CodeBlock code={ME_CURL} label="Request" />
+            <CodeBlock code={ME_RESPONSE} label="Response (shortened)" />
+            <ul>
+              <li>
+                <code>period</code> is <code>day</code> or <code>month</code> (UTC), or{" "}
+                <code>total</code> for a prepaid amount that doesn’t start over.{" "}
+                <code>null</code> means no limit, and <code>providers: null</code> means every
+                provider.
+              </li>
+              <li>
+                Failed requests (<code>errors</code>) don’t count against the limit. Tokens are
+                what the provider reported; where it doesn’t say (the web chats, Codex, Gemini
+                CLI), they’re estimated from the prompt’s and answer’s length, about 4 characters a
+                token, and counted in <code>estimatedTokens</code> too. Speech, transcription and
+                images count as requests only.
+              </li>
+            </ul>
+          </Section>
+
           <Section id="usage" title="Usage">
             <Endpoint method="GET" path="/api/usage?month=YYYY-MM" owner />
             <p>
@@ -969,11 +1028,31 @@ export default function DocumentsPage() {
           <Section id="tokens" title="Access tokens">
             <Endpoint method="GET" path="/api/tokens" owner />
             <Endpoint method="POST" path="/api/tokens" owner />
+            <Endpoint method="PATCH" path="/api/tokens?id=…" owner />
             <Endpoint method="DELETE" path="/api/tokens?id=…" owner />
             <p>
-              Create, list and revoke the tokens apps use instead of your owner key. A revoked
-              token stops working right away. The console’s API keys page does the same.
+              Make, change and delete the keys other apps and people use instead of your owner
+              key, and read what each one has used. Changes take effect on the next request. The
+              console’s API keys page does the same. Only a hash of each key is stored, so a lost
+              key can’t be shown again: give it a new secret instead.
             </p>
+            <Fields
+              rows={[
+                ["name", "string", "Who or what it’s for."],
+                ["note", "string", "Your own note (contact, plan, payment). The key’s holder never sees it."],
+                ["limits.period", "string", <><code>month</code> (default) or <code>day</code>, UTC, or <code>total</code>: a prepaid amount that doesn’t start over.</>],
+                ["limits.tokens", "number", <>Tokens per period. <code>null</code> (default): no limit.</>],
+                ["limits.requests", "number", <>Requests per period; failed ones don’t count. <code>null</code>: no limit.</>],
+                ["limits.perMinute", "number", <>Requests in any 60 seconds. <code>null</code>: no limit.</>],
+                ["expiresAt", "string", <>When it stops working. A date (<code>2026-11-30</code>) means the end of that day, UTC. <code>null</code>: never.</>],
+                ["providers", "string[]", <>The providers it can use. <code>null</code> (default): all of them.</>],
+                ["agentTools", "boolean", <>Default <code>false</code>: Claude Code and Codex answer without their tools, in the gateway’s own folder, and Gemini CLI, Antigravity and <code>/api/image</code> are refused. <code>true</code> lets the CLIs read files on the machine, in a <code>workdir</code> the caller picks. Only for keys you’d trust with that.</>],
+                ["disabled", "boolean", "PATCH: turn it off (true) or on again."],
+                ["addTokens, addRequests", "number", "PATCH: raise the limit by this much (a top-up)."],
+                ["extendDays", "number", "PATCH: move the expiry this many days later, from now if it’s already past."],
+                ["rotate", "boolean", <>PATCH: a new secret, sent back in <code>token</code>. The old one stops working; limits and usage stay.</>],
+              ]}
+            />
             <CodeBlock code={TOKENS_CURL} label="Requests" />
           </Section>
 
@@ -1096,9 +1175,9 @@ export default function DocumentsPage() {
                 [<code key="c">400</code>, <>Something’s wrong with the request: invalid JSON, an unknown provider, no <code>prompt</code> or <code>messages</code>, or a bad <code>workdir</code>, <code>session_id</code> or model for a CLI.</>],
                 [<code key="c">401</code>, "The key is missing or wrong, or this key can’t call this endpoint."],
                 [<code key="c">402</code>, "The cloud provider wants payment (passed on from the provider)."],
-                [<code key="c">403</code>, <><code>workdir</code> is outside the folders the gateway allows, or a request reached the gateway’s public door without coming through its address.</>],
+                [<code key="c">403</code>, <>The access token is turned off or expired, or can’t use that provider (or images); <code>workdir</code> is outside the folders the gateway allows; or a request reached the gateway’s public door without coming through its address.</>],
                 [<code key="c">404</code>, "No access token with that id."],
-                [<code key="c">429</code>, <>Too many requests: 10 wrong keys from your address in 10 minutes (for 15 minutes), every key of a cloud provider is rate limited or at its daily limit, a CLI reached its plan’s usage limit, a CLI already has 2 running, or every Groq key is at its transcription limit. <code>Retry-After</code> says how many seconds to wait, when that’s known.</>],
+                [<code key="c">429</code>, <>Too many requests: the access token has used its tokens or requests for the period, or its requests a minute (<a href="#me">/api/me</a> says which), 10 wrong keys from your address in 10 minutes (for 15 minutes), every key of a cloud provider is rate limited or at its daily limit, a CLI reached its plan’s usage limit, a CLI already has 2 running, or every Groq key is at its transcription limit. <code>Retry-After</code> says how many seconds to wait, when that’s known.</>],
                 [<code key="c">502</code>, "The provider failed: it couldn’t be reached, or the CLI failed or isn’t signed in."],
                 [<code key="c">503</code>, <>The provider is paused. See <a href="#providers">Pause &amp; resume</a>.</>],
                 [<code key="c">504</code>, "A CLI took longer than 5 minutes."],

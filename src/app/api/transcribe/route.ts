@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { transcribeWithGroq } from "@/lib/ai-providers";
 import { recordLocalRun, transcribeOnWeb } from "@/lib/local-agent";
 import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
-import { checkAccess, refusal } from "@/lib/auth";
+import { checkAccess, keyRule, refusal, type KeyRule } from "@/lib/auth";
 
 // Whisper on Groq answers in about a second, leaving room for trying every key;
 // MiMo's ASR page takes 3–10 s.
@@ -54,8 +54,12 @@ export async function POST(req: NextRequest) {
   }
 
   const provider = String(incoming.get("provider") || "groq");
-  if (provider === "mimo") return transcribeOnMimo(file, incoming);
-  if (provider !== "groq") return badRequest(`Unknown provider "${provider}". Supported: groq, mimo`);
+  if (provider !== "groq" && provider !== "mimo") return badRequest(`Unknown provider "${provider}". Supported: groq, mimo`);
+  const rule = keyRule(access, provider);
+  if (rule.refused) {
+    return NextResponse.json({ error: rule.refused }, { status: 403, headers: CORS_HEADERS });
+  }
+  if (provider === "mimo") return transcribeOnMimo(file, incoming, rule);
 
   // Transcription runs on the Groq keys, so pausing Groq pauses it too.
   if (await isProviderPaused("groq")) {
@@ -69,7 +73,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const result = await transcribeWithGroq(form);
+    const result = await transcribeWithGroq(form, rule.caller);
     const headers: Record<string, string> = { ...CORS_HEADERS, "Content-Type": result.contentType };
     if (result.retryAfter) headers["Retry-After"] = result.retryAfter;
     return new NextResponse(result.body, { status: result.status, headers });
@@ -81,12 +85,13 @@ export async function POST(req: NextRequest) {
   }
 }
 
-async function transcribeOnMimo(file: Blob, incoming: FormData) {
+async function transcribeOnMimo(file: Blob, incoming: FormData, rule: KeyRule) {
   if (await isProviderPaused("mimo")) {
     return NextResponse.json({ error: pausedMessage("mimo") }, { status: 503, headers: CORS_HEADERS });
   }
   const model = String(incoming.get("model") || "mimo-v2.5-asr");
   const filename = file instanceof File && file.name ? file.name : undefined;
+  const caller = { id: rule.caller };
   try {
     const { status, data } = await transcribeOnWeb({
       provider: "mimo",
@@ -96,10 +101,10 @@ async function transcribeOnMimo(file: Blob, incoming: FormData) {
     });
     const ok = status >= 200 && status < 300;
     const result = data as { duration_ms?: number };
-    recordLocalRun("mimo", model, ok ? { status: "ok", model, durationMs: result.duration_ms } : { status: "error" });
+    recordLocalRun("mimo", model, ok ? { status: "ok", model, durationMs: result.duration_ms } : { status: "error" }, caller);
     return NextResponse.json(data, { status, headers: CORS_HEADERS });
   } catch (err) {
-    recordLocalRun("mimo", model, { status: "error" });
+    recordLocalRun("mimo", model, { status: "error" }, caller);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "chatgpt-web-gateway request failed" },
       { status: 502, headers: CORS_HEADERS }

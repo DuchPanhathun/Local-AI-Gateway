@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { defaultModel, listModels, PROVIDER_IDS } from "@/lib/ai-providers";
 import { LOCAL_AGENT_PROVIDER_IDS, models as localAgentModels } from "@/lib/local-agent";
 import { getPausedProviders } from "@/lib/provider-state";
-import { checkAccess, refusal } from "@/lib/auth";
+import { checkAccess, keyRule, refusal } from "@/lib/auth";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": process.env.ALLOWED_ORIGIN || "*",
@@ -24,7 +24,8 @@ type LocalProviderModels = {
 
 // Every provider's selectable models in one response, and whether it's
 // paused. Unlike quotas/health, generated tokens may call this too: it's
-// discovery info for API callers, with no usage data or secrets in it.
+// discovery info for API callers, with no usage data or secrets in it. A
+// token only sees the providers its key can use.
 export async function GET(req: NextRequest) {
   const access = await checkAccess(req, "app");
   if (!access.ok) return refusal(access, CORS_HEADERS);
@@ -72,6 +73,10 @@ export async function GET(req: NextRequest) {
       error: p ? (p.error ?? (p.installed === false ? "CLI not installed" : null)) : localError,
       paused: paused.has(id),
     };
+  }
+
+  for (const id of Object.keys(providers)) {
+    if (keyRule(access, id).refused) delete providers[id];
   }
 
   return NextResponse.json({ providers }, { headers: CORS_HEADERS });

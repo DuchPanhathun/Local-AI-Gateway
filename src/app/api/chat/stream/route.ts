@@ -10,7 +10,7 @@ import {
 } from "@/lib/local-agent";
 import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
 import { bodyRetryAfter, RateLimitedError, retryAfterHeaders } from "@/lib/rate-limits";
-import { checkAccess, refusal } from "@/lib/auth";
+import { checkAccess, keyRule, refusal } from "@/lib/auth";
 import { withKeepAlive } from "@/lib/sse";
 
 export const maxDuration = 300;
@@ -70,6 +70,11 @@ export async function POST(req: NextRequest) {
   // Same default as /api/chat.
   const providerId = payload.provider ?? "sea-lion";
 
+  const rule = keyRule(access, providerId);
+  if (rule.refused) {
+    return NextResponse.json({ error: rule.refused }, { status: 403, headers: CORS_HEADERS });
+  }
+
   if (await isProviderPaused(providerId)) {
     return NextResponse.json(
       { error: pausedMessage(providerId) },
@@ -89,6 +94,7 @@ export async function POST(req: NextRequest) {
       );
     }
     const model = typeof payload.model === "string" && payload.model ? payload.model : undefined;
+    const caller = { id: rule.caller, promptChars: prompt.length };
 
     try {
       const upstream = await askStream(
@@ -97,8 +103,13 @@ export async function POST(req: NextRequest) {
           prompt,
           ...(model ? { model } : {}),
           ...(payload.session_id ? { session_id: payload.session_id } : {}),
-          ...(payload.workdir ? { workdir: payload.workdir } : {}),
-          ...(payload.no_tools !== undefined ? { no_tools: Boolean(payload.no_tools) } : {}),
+          // A key without agent access: no tools, and the default workdir.
+          ...(payload.workdir && !rule.sandboxed ? { workdir: payload.workdir } : {}),
+          ...(rule.sandboxed
+            ? { no_tools: true }
+            : payload.no_tools !== undefined
+              ? { no_tools: Boolean(payload.no_tools) }
+              : {}),
           ...(payload.temporary !== undefined ? { temporary: Boolean(payload.temporary) } : {}),
         },
         req.signal
@@ -106,18 +117,18 @@ export async function POST(req: NextRequest) {
 
       if (!upstream.ok || !upstream.body) {
         // Failures before the stream opens (401/400/403/429) are ordinary JSON errors.
-        recordLocalRun(providerId, model, { status: "error" });
+        recordLocalRun(providerId, model, { status: "error" }, caller);
         const data = await upstream.json().catch(() => ({ error: "Upstream request failed" }));
         const headers = { ...CORS_HEADERS, ...retryAfterHeaders(bodyRetryAfter(data)) };
         return NextResponse.json(data, { status: upstream.status, headers });
       }
 
       const stream = relayStream(upstream.body, req.signal, (outcome) =>
-        recordLocalRun(providerId, model, outcome)
+        recordLocalRun(providerId, model, outcome, caller)
       );
       return new NextResponse(withKeepAlive(stream), { status: upstream.status, headers: SSE_HEADERS });
     } catch (err) {
-      recordLocalRun(providerId, model, { status: req.signal.aborted ? "stopped" : "error" });
+      recordLocalRun(providerId, model, { status: req.signal.aborted ? "stopped" : "error" }, caller);
       return NextResponse.json(
         { error: err instanceof Error ? err.message : "local-agent-gateway request failed" },
         { status: 502, headers: CORS_HEADERS }
@@ -165,7 +176,7 @@ export async function POST(req: NextRequest) {
   /* eslint-enable @typescript-eslint/no-unused-vars */
 
   try {
-    const result = await streamProvider(providerId, { messages, ...rest }, req.signal);
+    const result = await streamProvider(providerId, { messages, ...rest }, req.signal, rule.caller);
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status, headers: CORS_HEADERS });
     }

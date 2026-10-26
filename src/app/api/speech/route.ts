@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { recordLocalRun, speech, voices, type SpeechRequest } from "@/lib/local-agent";
 import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
-import { checkAccess, refusal } from "@/lib/auth";
+import { checkAccess, keyRule, refusal } from "@/lib/auth";
 
 // MiMo's TTS page takes 5–15 s; a recording to copy has to upload first.
 export const maxDuration = 300;
@@ -45,6 +45,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Provide `input` (string): the text to speak" }, { status: 400, headers: CORS_HEADERS });
   }
 
+  const rule = keyRule(access, "mimo");
+  if (rule.refused) {
+    return NextResponse.json({ error: rule.refused }, { status: 403, headers: CORS_HEADERS });
+  }
+  // Speech counts as requests: its text isn't charged as tokens.
+  const caller = { id: rule.caller };
+
   if (await isProviderPaused("mimo")) {
     return NextResponse.json({ error: pausedMessage("mimo") }, { status: 503, headers: CORS_HEADERS });
   }
@@ -55,7 +62,7 @@ export async function POST(req: NextRequest) {
     const { status, data } = await speech({ ...request, provider: "mimo", model });
     const ok = status >= 200 && status < 300;
     const result = data as { audio_base64?: string; mime_type?: string; voice?: string | null; duration_ms?: number };
-    recordLocalRun("mimo", model, ok ? { status: "ok", model, durationMs: result.duration_ms } : { status: "error" });
+    recordLocalRun("mimo", model, ok ? { status: "ok", model, durationMs: result.duration_ms } : { status: "error" }, caller);
     if (!ok || format === "json" || !result.audio_base64) {
       return NextResponse.json(data, { status, headers: CORS_HEADERS });
     }
@@ -70,7 +77,7 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (err) {
-    recordLocalRun("mimo", model, { status: "error" });
+    recordLocalRun("mimo", model, { status: "error" }, caller);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "chatgpt-web-gateway request failed" },
       { status: 502, headers: CORS_HEADERS }

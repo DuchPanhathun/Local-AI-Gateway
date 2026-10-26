@@ -11,7 +11,7 @@ import {
 } from "@/lib/local-agent";
 import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
 import { bodyRetryAfter, RateLimitedError, retryAfterHeaders } from "@/lib/rate-limits";
-import { checkAccess, refusal } from "@/lib/auth";
+import { checkAccess, keyRule, refusal } from "@/lib/auth";
 
 // With Fluid Compute (enabled on this project) the Hobby plan allows up to
 // 300s per invocation, not the pre-Fluid 60s cap — reasoning models like
@@ -66,6 +66,11 @@ export async function POST(req: NextRequest) {
 
   const providerId = payload.provider ?? DEFAULT_PROVIDER;
 
+  const rule = keyRule(access, providerId);
+  if (rule.refused) {
+    return NextResponse.json({ error: rule.refused }, { status: 403, headers: CORS_HEADERS });
+  }
+
   if (await isProviderPaused(providerId)) {
     return NextResponse.json(
       { error: pausedMessage(providerId) },
@@ -83,6 +88,7 @@ export async function POST(req: NextRequest) {
       );
     }
     const model = typeof payload.model === "string" && payload.model ? payload.model : undefined;
+    const caller = { id: rule.caller, promptChars: prompt.length };
 
     try {
       const { status, data } = await askLocalAgent({
@@ -90,25 +96,42 @@ export async function POST(req: NextRequest) {
         prompt,
         ...(model ? { model } : {}),
         ...(payload.session_id ? { session_id: payload.session_id } : {}),
-        ...(payload.workdir ? { workdir: payload.workdir } : {}),
-        ...(payload.no_tools !== undefined ? { no_tools: Boolean(payload.no_tools) } : {}),
+        // A key without agent access: no tools, and the default workdir.
+        ...(payload.workdir && !rule.sandboxed ? { workdir: payload.workdir } : {}),
+        ...(rule.sandboxed
+          ? { no_tools: true }
+          : payload.no_tools !== undefined
+            ? { no_tools: Boolean(payload.no_tools) }
+            : {}),
         ...(payload.temporary !== undefined ? { temporary: Boolean(payload.temporary) } : {}),
       });
       const ok = status >= 200 && status < 300;
-      const run = data as { model?: string | null; usage?: GatewayUsage | null; duration_ms?: number };
+      const run = data as {
+        model?: string | null;
+        result?: string;
+        usage?: GatewayUsage | null;
+        duration_ms?: number;
+      };
       recordLocalRun(
         providerId,
         model,
         ok
-          ? { status: "ok", model: run.model, usage: run.usage, durationMs: run.duration_ms }
-          : { status: "error" }
+          ? {
+              status: "ok",
+              model: run.model,
+              usage: run.usage,
+              durationMs: run.duration_ms,
+              answerChars: run.result?.length,
+            }
+          : { status: "error" },
+        caller
       );
       const body = ok ? normalizeAskResponse(data) : data;
       // A CLI's usage limit is a 429 whose body says when it resets.
       const headers = { ...CORS_HEADERS, ...retryAfterHeaders(ok ? undefined : bodyRetryAfter(data)) };
       return NextResponse.json(body, { status, headers });
     } catch (err) {
-      recordLocalRun(providerId, model, { status: "error" });
+      recordLocalRun(providerId, model, { status: "error" }, caller);
       return NextResponse.json(
         { error: err instanceof Error ? err.message : "local-agent-gateway request failed" },
         { status: 502, headers: CORS_HEADERS }
@@ -146,10 +169,7 @@ export async function POST(req: NextRequest) {
     payload;
 
   try {
-    const { status, data } = await callProvider(providerId, {
-      messages,
-      ...rest,
-    });
+    const { status, data } = await callProvider(providerId, { messages, ...rest }, rule.caller);
     return NextResponse.json(data, { status, headers: CORS_HEADERS });
   } catch (err) {
     if (err instanceof RateLimitedError) {

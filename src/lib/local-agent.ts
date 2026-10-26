@@ -322,19 +322,28 @@ export type LocalRunOutcome = {
   model?: string | null; // the model that answered, when the gateway says
   usage?: GatewayUsage | null;
   durationMs?: number;
+  answerChars?: number; // the answer's length, when there was one
 };
+
+// Who made the run, when it was an access token: the key's id, and the
+// prompt's length (for estimating its tokens, which the web chats and some
+// CLIs don't report).
+export type RunCaller = { id?: string; promptChars?: number };
 
 // A run whose model the gateway never named (it failed or was stopped before
 // the CLI said) is filed under the model asked for, else "default".
 export function recordLocalRun(
   provider: LocalAgentProviderId,
   requestedModel: string | undefined,
-  outcome: LocalRunOutcome
+  outcome: LocalRunOutcome,
+  caller?: RunCaller
 ): void {
   recordUsageEvent(provider, outcome.model || requestedModel || "default", {
     status: outcome.status,
     usage: toOpenAIUsage(outcome.usage),
     durationMs: outcome.durationMs,
+    caller: caller?.id,
+    textChars: (caller?.promptChars ?? 0) + (outcome.answerChars ?? 0),
   });
 }
 
@@ -423,6 +432,7 @@ export function relayStream(
       model: typeof data.model === "string" ? data.model : null,
       usage,
       durationMs: typeof data.duration_ms === "number" ? data.duration_ms : undefined,
+      answerChars: typeof data.result === "string" ? data.result.length : undefined,
     };
     return `event: done\ndata: ${JSON.stringify({ ...data, usage: toOpenAIUsage(usage) })}`;
   };

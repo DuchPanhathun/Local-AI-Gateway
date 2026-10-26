@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { image as generateImage, recordLocalRun } from "@/lib/local-agent";
 import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
-import { checkAccess, refusal } from "@/lib/auth";
+import { checkAccess, keyRule, refusal } from "@/lib/auth";
 
 // Codex's image_gen tool reports ~75s per image; give it headroom.
 export const maxDuration = 300;
@@ -46,6 +46,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const rule = keyRule(access, "codex", { image: true });
+  if (rule.refused) {
+    return NextResponse.json({ error: rule.refused }, { status: 403, headers: CORS_HEADERS });
+  }
+  const caller = { id: rule.caller, promptChars: payload.prompt.length };
+
   if (await isProviderPaused("codex")) {
     return NextResponse.json(
       { error: pausedMessage("codex") },
@@ -68,11 +74,12 @@ export async function POST(req: NextRequest) {
       model,
       status >= 200 && status < 300
         ? { status: "ok", model: run.model, durationMs: run.duration_ms }
-        : { status: "error" }
+        : { status: "error" },
+      caller
     );
     return NextResponse.json(data, { status, headers: CORS_HEADERS });
   } catch (err) {
-    recordLocalRun("codex", model, { status: "error" });
+    recordLocalRun("codex", model, { status: "error" }, caller);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "local-agent-gateway request failed" },
       { status: 502, headers: CORS_HEADERS }

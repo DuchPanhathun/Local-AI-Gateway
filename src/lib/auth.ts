@@ -1,19 +1,24 @@
 // Who's calling, for every API route: the owner (APP_API_KEY, or the
-// console's sign-in cookie) or an app with an access token. Made to face the
+// console's sign-in cookie) or someone with an access token, held to that
+// key's limits, expiry and providers (lib/api-tokens.ts). Made to face the
 // internet: keys are compared in constant time, an address that keeps sending
 // wrong keys is locked out for a while, and requests that come in through the
 // public door (deploy/public-door.mjs marks them x-thun-public) are refused
 // outright unless APP_API_KEY is set.
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { NextRequest } from "next/server";
-import { isValidGeneratedToken } from "./api-tokens";
+import { admit, findKey, type ApiToken } from "./api-tokens";
 
 export type Access =
-  | { ok: true; who: "owner" | "token" }
+  | { ok: true; who: "owner" }
+  | { ok: true; who: "token"; key: ApiToken }
   | { ok: false; status: 401 | 403 | 429 | 503; error: string; headers?: Record<string, string> };
 
-// "owner": APP_API_KEY or the console's cookie. "app": that, or an access token.
-export type Need = "owner" | "app";
+// "owner": APP_API_KEY or the console's cookie. "app": that, or an access
+// token that's on, unexpired and within its limits. "self": that, or any
+// access token, even one that's off, expired or used up (for GET /api/me,
+// so its holder can see why).
+export type Need = "owner" | "app" | "self";
 
 export function sameSecret(a: string, b: string): boolean {
   const digest = (s: string) => createHash("sha256").update(s).digest();
@@ -170,7 +175,15 @@ export async function checkAccess(req: NextRequest, need: Need): Promise<Access>
       recordSuccess(client);
       return { ok: true, who: "owner" };
     }
-    if (need === "app" && (await isValidGeneratedToken(bearer))) return { ok: true, who: "token" };
+    const key = need === "owner" ? null : await findKey(bearer);
+    if (key) {
+      const blocked = need === "app" ? admit(key) : null;
+      if (blocked) {
+        const headers = blocked.retryAfter ? { "Retry-After": String(blocked.retryAfter) } : undefined;
+        return { ok: false, status: blocked.status, error: blocked.error, headers };
+      }
+      return { ok: true, who: "token", key };
+    }
     recordFailure(client);
     const after = lockedFor(client);
     return after ? lockedOut(after) : { ok: false, status: 401, error: "Unauthorized" };
@@ -181,6 +194,49 @@ export async function checkAccess(req: NextRequest, need: Need): Promise<Access>
     return { ok: true, who: "owner" };
   }
   return { ok: false, status: 401, error: "Unauthorized" };
+}
+
+// ---------------------------------------------------------------------------
+// What an access token may do with a provider
+// ---------------------------------------------------------------------------
+
+// The local CLIs read files on this machine when they run with their tools.
+// Claude Code and Codex can answer without them (no_tools); Gemini CLI and
+// Antigravity can't.
+const HOST_AGENTS = new Set(["claude", "codex", "gemini", "antigravity"]);
+const TOOL_FREE = new Set(["claude", "codex"]);
+
+export type KeyRule = {
+  refused: string | null; // why this key can't use the provider, for a 403
+  // A key without agent access: local CLIs run without their tools, in the
+  // gateway's default workdir.
+  sandboxed: boolean;
+  caller?: string; // the key's id, which its usage is counted under
+};
+
+// `image`: for /api/image, which runs Codex with its image tool.
+export function keyRule(
+  access: Extract<Access, { ok: true }>,
+  provider: string,
+  { image = false }: { image?: boolean } = {}
+): KeyRule {
+  if (access.who === "owner") return { refused: null, sandboxed: false };
+  const { key } = access;
+  if (key.providers && !key.providers.includes(provider)) {
+    const allowed = key.providers.length ? `It can use ${key.providers.join(", ")}.` : "It can't use any provider.";
+    return { refused: `This API key can't use ${provider}. ${allowed}`, sandboxed: true, caller: key.id };
+  }
+  if (!key.agentTools && image) {
+    return { refused: "This API key can't generate images: that runs Codex on the server with its tools.", sandboxed: true, caller: key.id };
+  }
+  if (!key.agentTools && HOST_AGENTS.has(provider) && !TOOL_FREE.has(provider)) {
+    return {
+      refused: `This API key can't use ${provider}: it only runs with its tools, which read files on the server.`,
+      sandboxed: true,
+      caller: key.id,
+    };
+  }
+  return { refused: null, sandboxed: !key.agentTools, caller: key.id };
 }
 
 // Sign-in with the owner key, for /api/session: the lockout counts here too.

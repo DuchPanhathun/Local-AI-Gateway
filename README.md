@@ -37,10 +37,10 @@ Fill in `.env`:
   revoke API tokens (see below). Leave it blank to disable auth entirely (not recommended once the
   URL is public).
 - `ALLOWED_ORIGIN` (optional) — restrict CORS to one caller's origin instead of `*`.
-- `EDGE_CONFIG`, `EDGE_CONFIG_ID`, `VERCEL_TEAM_ID`, `VERCEL_API_TOKEN` — back the dynamic API token
-  store (see **Dashboard & API tokens** below). Not needed for `/api/chat` itself to work with
-  `APP_API_KEY` alone; only needed if you want to generate separate, revocable tokens for other
-  callers.
+- `EDGE_CONFIG` (optional, once) — where access tokens were kept when ai-thun ran on Vercel. If
+  it's set, tokens still there are brought over to the state folder the first time they're needed
+  (see **Access tokens** below); after that it, `EDGE_CONFIG_ID`, `VERCEL_TEAM_ID` and
+  `VERCEL_API_TOKEN` aren't used and can be removed.
 
 Run locally:
 
@@ -313,7 +313,7 @@ dark themes, following the OS unless you pick one in the sidebar):
 - **Playground** — chat with any provider and model, streamed, with reasoning shown live for
   thinking models, a Stop button, and Workbench-style settings (max tokens, temperature, SEA-LION's
   thinking switch for cloud; working directory and session for local CLIs).
-- **API keys** — access tokens (below).
+- **API keys** — access tokens for other apps and people, with their limits and usage (below).
 - **Analytics** — today's usage. Cloud APIs: per key and model, against each provider's published
   limits (requests/min, tokens/min, requests/day, tokens/day), idle keys hidden unless you ask.
   Local CLIs: runs per CLI and model, with failures, input/output tokens (where the CLI reports
@@ -347,24 +347,42 @@ curl -X PATCH http://localhost:3000/api/providers \
 `GET /api/providers` returns the list. It's saved in `~/.local/state/ai-thun/providers.json`
 (`AI_THUN_STATE_DIR` to move it), outside the project folder, so restarts and deploys keep it.
 
-**Access tokens** are separate, revocable credentials you can hand out to other apps/people
-  instead of your `APP_API_KEY`. A generated token can call `/api/chat`, `/api/chat/stream`,
-  `/api/image`, `/api/transcribe`, `/api/speech` and `/api/models`, and *nothing else* — it cannot log into the home page (`/`),
-  view quotas or CLI health, list other tokens, or generate more tokens. Only `APP_API_KEY`
-  (i.e. only you) can do that. The full token value is shown once, at creation time, then only a
-  masked version (`sk-ai-thun-ab12…cd34`) is shown afterward. Revoke any token instantly from the
-  same page.
+### Access tokens
 
-Unlike the quota numbers, the token list is **not** best-effort — it's stored in
-[Vercel Edge Config](https://vercel.com/docs/edge-config), a real external store, so every
-serverless instance and every deployment sees the same list and a revoke takes effect immediately.
+**Access tokens** (`sk-ai-thun-…`) are keys you hand out to other apps and people instead of your
+`APP_API_KEY`. A token can call `/api/chat`, `/api/chat/stream`, `/api/image`, `/api/transcribe`,
+`/api/speech`, `/api/models` and `/api/me`, and *nothing else*: it can't sign in to the console,
+see usage or quotas, or manage tokens. Make and manage them on the console's **API keys** page, or
+with `/api/tokens` and the owner key (all of it is in `/documents`). Each one has:
 
-Setting this up requires four env vars (`EDGE_CONFIG`, `EDGE_CONFIG_ID`, `VERCEL_TEAM_ID`,
-`VERCEL_API_TOKEN`) pointing at an Edge Config store and a Vercel API token with write access to it.
-**Security note:** Vercel doesn't support minting a narrowly-scoped token for just one Edge Config
-via API, so `VERCEL_API_TOKEN` here has full account access — treat it exactly like your Vercel
-login (stored server-side only, never sent to the browser, but rotate it via
-`vercel logout && vercel login` plus updating the env var if you ever suspect it leaked).
+- **Limits**: tokens and requests per UTC day, per UTC month, or in total (a prepaid amount you top
+  up with **Add tokens**), and requests a minute. Failed requests don't count. A key over a limit
+  gets `429` (with `Retry-After` until its day or month starts over), and so does one over its
+  requests a minute.
+- **An expiry date** (`403` after it; **+30 days** pushes it on), and an **on/off switch** (`403`).
+- **Providers** it may use (`403` for the others; `/api/models` only lists those).
+- **Agent access**, off by default. Off: Claude Code and Codex answer without their tools, in the
+  gateway's default folder whatever `workdir` says, and Gemini CLI, Antigravity (which can't run
+  without tools) and `/api/image` are refused. On: the CLIs run with their read-only tools in a
+  `workdir` the caller picks, which can read any file there, including this gateway's `.env`.
+  Leave it off for keys other people hold.
+- **Usage**, counted per key, day, provider and model: tokens as the provider reports them, or
+  estimated from the prompt's and answer's length (about 4 characters a token) where it doesn't
+  (ChatGPT, Grok and MiMo on the web, Codex, Gemini CLI). Speech, transcription and images count
+  as requests only.
+
+A key's holder reads its status, limits, what's used and left, and when it expires at
+`GET /api/me`, which answers even when the key is off, expired or used up. **New key** on the console
+shows the key once, with **Copy message**: the key, the public address (the first of
+`PUBLIC_ORIGINS`), its limits and how to check them, ready to send. Only a SHA-256 hash of each key
+is kept, so a lost key can't be shown again: **New secret** replaces it, keeping its limits and
+usage.
+
+Tokens and their usage are saved in `~/.local/state/ai-thun/tokens.json` (`AI_THUN_STATE_DIR` to
+move it), next to the usage ledger, so restarts and deploys keep them; the owner's changes are
+saved before they're answered, usage a second after each request. Tokens made before this (in
+Vercel Edge Config) are brought over the first time they're needed, with no limits and the agent
+access they had then, if `EDGE_CONFIG` is still set.
 
 ## Deploying (self-hosted on thun-latitude-7280, via Tailscale)
 

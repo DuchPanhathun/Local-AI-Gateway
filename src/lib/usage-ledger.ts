@@ -1,4 +1,5 @@
 import { readFileSync, renameSync } from "node:fs";
+import { recordKeyUsage } from "./api-tokens";
 import { statePath, writeJsonAtomic, writeJsonAtomicSync } from "./state-files";
 
 // Usage that outlives restarts: requests and tokens per UTC day, provider and
@@ -24,6 +25,10 @@ export type UsageOutcome = {
   usage?: TokenUsage | null;
   durationMs?: number;
   keyName?: string; // cloud APIs: the env var holding the key used, never the key
+  caller?: string; // the access token's id, when one made the request
+  // The prompt's and answer's length, for estimating the caller's tokens when
+  // the provider doesn't report them.
+  textChars?: number;
 };
 
 type Counts = {
@@ -197,6 +202,14 @@ export function recordUsageEvent(provider: string, model: string, outcome: Usage
     const key = ((entry.keys ??= {})[outcome.keyName] ??= { requests: 0, tokens: 0 });
     key.requests += 1;
     key.tokens += tokens?.total ?? 0;
+  }
+
+  if (outcome.caller) {
+    recordKeyUsage(outcome.caller, provider, model, {
+      failed: outcome.status === "error",
+      tokens: tokens ? tokens.total : null,
+      textChars: outcome.textChars,
+    });
   }
 
   s.changes += 1;

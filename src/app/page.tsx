@@ -10,9 +10,11 @@ import {
   type ReactNode,
 } from "react";
 import Link from "next/link";
+import { ApiKeys, type KeySummary } from "./api-keys";
 import { Logo } from "./logo";
 import styles from "./page.module.css";
 import { getThemePref, setThemePref, subscribeTheme, type ThemePref } from "./theme";
+import { CopyButton, dayLabel, formatCount, monthLabel, ProgressBar } from "./ui";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -75,13 +77,6 @@ type MonthUsage = {
   totals: UsageTotals;
   models: ModelUsage[];
   days: { day: string; requests: number; totalTokens: number }[];
-};
-
-type ApiTokenSummary = {
-  id: string;
-  label: string;
-  createdAt: string;
-  masked: string;
 };
 
 type LocalAgentProviderHealth = {
@@ -225,7 +220,7 @@ const NAV_ITEMS: {
     label: "API keys",
     icon: "key",
     description:
-      "Access tokens for calling this gateway from other apps. Only you can create or revoke them.",
+      "Keys for other people and apps, each with its own limits, expiry and usage. Only you can manage them.",
   },
   {
     id: "analytics",
@@ -418,50 +413,6 @@ function Icon({ name, className }: { name: IconName; className?: string }) {
   );
 }
 
-function CopyButton({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // clipboard API unavailable — the value is still visible to select manually
-    }
-  }
-  return (
-    <button type="button" className={styles.buttonGhost} onClick={copy}>
-      {copied ? "Copied" : "Copy"}
-    </button>
-  );
-}
-
-function ProgressBar({ used, limit }: { used: number; limit?: number }) {
-  if (!limit) {
-    return <span className={styles.dim}>{used.toLocaleString()}</span>;
-  }
-  const pct = Math.min(100, (used / limit) * 100);
-  const color =
-    pct >= 90
-      ? "var(--danger)"
-      : pct >= 70
-        ? "var(--warning)"
-        : "var(--success)";
-  return (
-    <div>
-      <div className={styles.progressLabel}>
-        {used.toLocaleString()} / {limit.toLocaleString()} ({pct.toFixed(1)}%)
-      </div>
-      <div className={styles.progressTrack}>
-        <div
-          className={styles.progressFill}
-          style={{ width: `${pct}%`, background: color }}
-        />
-      </div>
-    </div>
-  );
-}
-
 // How much of a plan limit is left. Rounded the way the CLIs show it.
 function RemainingBar({ fraction }: { fraction: number }) {
   const pct = Math.max(0, Math.min(100, fraction * 100));
@@ -521,32 +472,6 @@ function resetLabel(iso: string | null, now: number): string {
   });
   const wait = at.getTime() - now;
   return wait > 0 ? `${when} (in ${formatWait(wait)})` : `${when} (now)`;
-}
-
-const compactFormat = new Intl.NumberFormat("en", {
-  notation: "compact",
-  maximumFractionDigits: 1,
-});
-
-function formatCount(n: number): string {
-  return n >= 10_000 ? compactFormat.format(n) : n.toLocaleString();
-}
-
-// "2026-10" → "October 2026"; "2026-10-15" → "Oct 15". Usage days are UTC.
-function monthLabel(month: string): string {
-  return new Date(`${month}-01T00:00:00Z`).toLocaleDateString("en", {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  });
-}
-
-function dayLabel(day: string): string {
-  return new Date(`${day}T00:00:00Z`).toLocaleDateString("en", {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  });
 }
 
 // The gateway's notes are lowercase fragments; show them as sentences.
@@ -737,11 +662,10 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
 
-  const [tokens, setTokens] = useState<ApiTokenSummary[] | null>(null);
-  const [tokenLabel, setTokenLabel] = useState("");
-  const [newToken, setNewToken] = useState<string | null>(null);
-  const [tokenError, setTokenError] = useState<string | null>(null);
-  const [tokenBusy, setTokenBusy] = useState(false);
+  const [tokens, setTokens] = useState<KeySummary[] | null>(null);
+  // When the list was loaded: "last used" and "expires in" are from then.
+  const [tokensAt, setTokensAt] = useState(0);
+  const [publicOrigin, setPublicOrigin] = useState<string | null>(null);
   const [origin] = useState(() =>
     typeof window === "undefined" ? "" : window.location.origin,
   );
@@ -809,6 +733,8 @@ export default function Dashboard() {
       if (!res.ok) return;
       const data = await res.json();
       setTokens(data.tokens);
+      setPublicOrigin(data.publicOrigin ?? null);
+      setTokensAt(Date.now());
     } catch {
       // network hiccup — leave the previous list showing
     }
@@ -923,50 +849,6 @@ export default function Dashboard() {
     const el = transcriptRef.current;
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
   }, [chatMessages, chatStreaming, chatStreamingThinking]);
-
-  async function handleCreateToken(e: FormEvent) {
-    e.preventDefault();
-    if (!signedIn) return;
-    setTokenBusy(true);
-    setTokenError(null);
-    try {
-      const res = await fetch("/api/tokens", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label: tokenLabel }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setTokenError(data.error || `Failed (HTTP ${res.status})`);
-        return;
-      }
-      setNewToken(data.token);
-      setTokenLabel("");
-      await loadTokens();
-    } catch {
-      setTokenError("Network error creating token");
-    } finally {
-      setTokenBusy(false);
-    }
-  }
-
-  async function handleRevoke(id: string) {
-    if (!signedIn) return;
-    if (
-      !confirm(
-        "Revoke this token? Anything using it will stop working immediately.",
-      )
-    )
-      return;
-    try {
-      const res = await fetch(`/api/tokens?id=${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      });
-      if (res.ok) await loadTokens();
-    } catch {
-      // best-effort — the list will just look stale until next refresh
-    }
-  }
 
   async function handleTogglePause(p: ChatProvider, pause: boolean) {
     if (!signedIn) return;
@@ -1317,7 +1199,8 @@ export default function Dashboard() {
     (keys ?? []).reduce((sum, k) => sum + k.tokensToday, 0) +
     (localUsage ?? []).reduce((sum, r) => sum + r.tokensToday, 0);
   const totalKeys = new Set((keys ?? []).map((k) => k.keyName)).size;
-  const activeTokenCount = tokens?.length ?? 0;
+  const activeTokenCount =
+    tokens?.filter((t) => t.status === "active").length ?? 0;
   const installedClis = LOCAL_PROVIDERS.filter(
     (p) => localAgent?.providers[p]?.installed,
   ).length;
@@ -1779,9 +1662,9 @@ export default function Dashboard() {
             <Icon name="key" />
           </span>
           <span>
-            <span className={styles.actionTitle}>Create an access token</span>
+            <span className={styles.actionTitle}>Create an API key</span>
             <span className={styles.actionDesc}>
-              For apps calling this gateway
+              For an app or a person, with its own limits
             </span>
           </span>
         </button>
@@ -2200,94 +2083,16 @@ export default function Dashboard() {
   );
 
   const apiKeysView = (
-    <section className={styles.section}>
-      <div className={styles.sectionHeader}>
-        <span className={styles.sectionTitle}>Access tokens</span>
-        <span className={styles.badge}>{activeTokenCount} active</span>
-      </div>
-      <p className={styles.sectionDesc}>
-        A token can call <code>/api/chat</code>, <code>/api/chat/stream</code>,{" "}
-        <code>/api/image</code>, <code>/api/transcribe</code>,{" "}
-        <code>/api/speech</code> and <code>/api/models</code> — nothing else. Give one to each app instead
-        of sharing your APP_API_KEY, and revoke it when that app no longer
-        needs access.
-      </p>
-
-      <form onSubmit={handleCreateToken} className={styles.inlineForm}>
-        <input
-          value={tokenLabel}
-          onChange={(e) => setTokenLabel(e.target.value)}
-          placeholder="Name, e.g. news-scraper"
-          className={styles.input}
-        />
-        <button type="submit" disabled={tokenBusy} className={styles.button}>
-          {tokenBusy ? "Creating…" : "Create token"}
-        </button>
-      </form>
-
-      {tokenError && (
-        <div className={styles.alert} style={{ marginBottom: 16 }}>
-          {tokenError}
-        </div>
-      )}
-
-      {newToken && (
-        <div className={styles.reveal}>
-          <div className={styles.revealLabel}>
-            Copy this token now — it won&apos;t be shown again.
-          </div>
-          <div className={styles.revealRow}>
-            <span className={styles.revealValue}>{newToken}</span>
-            <CopyButton value={newToken} />
-            <button
-              type="button"
-              className={styles.buttonGhost}
-              onClick={() => setNewToken(null)}
-            >
-              Done
-            </button>
-          </div>
-        </div>
-      )}
-
-      {tokens && tokens.length > 0 && (
-        <div className={styles.tableWrap}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Token</th>
-                <th>Created</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {tokens.map((t) => (
-                <tr key={t.id}>
-                  <td>{t.label}</td>
-                  <td className={`${styles.mono} ${styles.dim}`}>{t.masked}</td>
-                  <td className={styles.dim}>
-                    {new Date(t.createdAt).toLocaleDateString()}
-                  </td>
-                  <td style={{ textAlign: "right" }}>
-                    <button
-                      type="button"
-                      className={styles.buttonDanger}
-                      onClick={() => handleRevoke(t.id)}
-                    >
-                      Revoke
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {tokens && tokens.length === 0 && (
-        <p className={styles.empty}>No tokens yet.</p>
-      )}
-    </section>
+    <ApiKeys
+      keys={tokens}
+      publicOrigin={publicOrigin}
+      providers={[...CLOUD_PROVIDERS, ...LOCAL_PROVIDERS].map((p) => ({
+        id: p,
+        label: PROVIDER_LABELS[p],
+      }))}
+      reload={loadTokens}
+      now={tokensAt}
+    />
   );
 
   // A provider's name on a stat card, with a badge when it's paused.
