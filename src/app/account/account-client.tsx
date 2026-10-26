@@ -5,7 +5,7 @@
 // and their usage. The plan is set by the owner on the console's Users page;
 // a new account waits until the owner activates it.
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import type { Session } from "@supabase/supabase-js";
 import { supabaseBrowser } from "@/lib/supabase-browser";
@@ -62,11 +62,40 @@ type AccountData = {
   publicOrigin: string | null;
 };
 
+type Pack = {
+  id: string;
+  name: string;
+  description: string;
+  tokens: number;
+  providers: string[] | null;
+  days: number | null;
+  priceCents: number;
+  pricing: { marketCents: number | null; savingPercent: number | null };
+};
+
+type Purchase = {
+  id: string;
+  packName: string;
+  priceCents: number;
+  status: "pending" | "paid";
+  createdAt: string;
+  paidAt: string | null;
+  applied: string | null;
+  code: string | null; // only while it waits to be redeemed
+};
+
+type ShopData = {
+  packs: Pack[];
+  payments: { configured: boolean; live: boolean };
+  orders: Purchase[];
+};
+
 type Mode = "signin" | "signup" | "forgot" | "reset";
 
 const LABELS = new Map<string, string>(PROVIDER_OPTIONS.map((p) => [p.id, p.label]));
 const PERIOD_USED = { day: "today", month: "this month", total: "in total" };
 const REFRESH_MS = 30_000;
+const usd = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 const CONFIGURED = Boolean(
   process.env.NEXT_PUBLIC_SUPABASE_URL &&
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
@@ -96,6 +125,13 @@ export function AccountDashboard() {
     new Date().toISOString().slice(0, 7),
   );
   const [keyName, setKeyName] = useState("");
+  const [codeText, setCodeText] = useState("");
+  const [redeemed, setRedeemed] = useState<string | null>(null);
+  const [redeemError, setRedeemError] = useState<string | null>(null);
+  const [shop, setShop] = useState<ShopData | null>(null);
+  const [shopNotice, setShopNotice] = useState<string | null>(null);
+  const [shopError, setShopError] = useState<string | null>(null);
+  const paypalHandled = useRef(false);
   const [revealed, setRevealed] = useState<{
     name: string;
     secret: string;
@@ -130,6 +166,7 @@ export function AccountDashboard() {
       method: "GET" | "POST" | "PATCH" | "DELETE",
       path: string,
       body?: unknown,
+      onError: (message: string) => void = setError,
     ): Promise<Record<string, unknown> | null> => {
       if (!token) return null;
       try {
@@ -144,12 +181,12 @@ export function AccountDashboard() {
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
-          setError(json.error || `Failed (HTTP ${res.status})`);
+          onError(json.error || `Failed (HTTP ${res.status})`);
           return null;
         }
         return json;
       } catch {
-        setError("Network error reaching the gateway");
+        onError("Network error reaching the gateway");
         return null;
       }
     },
@@ -162,7 +199,48 @@ export function AccountDashboard() {
       setData(json as AccountData);
       setLoadedAt(Date.now());
     }
+    const shopJson = await call("GET", "/api/account/shop", undefined, setShopError);
+    if (shopJson) setShop(shopJson as unknown as ShopData);
   }, [call, month]);
+
+  // Back from PayPal (/account?paypal=return&token=<order id>, or
+  // paypal=cancel): finish or cancel that order, once, then tidy the address.
+  useEffect(() => {
+    if (!token || paypalHandled.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const outcome = params.get("paypal");
+    const orderId = params.get("token");
+    if (!outcome || !orderId) return;
+    paypalHandled.current = true;
+    window.history.replaceState(null, "", "/account");
+    async function run() {
+      if (outcome === "cancel") {
+        await call("PATCH", `/api/account/orders?id=${encodeURIComponent(orderId!)}`, { action: "cancel" }, setShopError);
+        setShopNotice("You cancelled the payment: nothing was charged.");
+        return;
+      }
+      setShopNotice("Finishing your payment…");
+      const json = await call(
+        "PATCH",
+        `/api/account/orders?id=${encodeURIComponent(orderId!)}`,
+        { action: "finish" },
+        setShopError,
+      );
+      if (!json) {
+        setShopNotice(null);
+        return;
+      }
+      setShopNotice(
+        json.status === "pending"
+          ? "PayPal has your payment but it hasn't cleared yet. Your tokens are added once it does: check again under Your purchases."
+          : json.applied
+            ? `Thank you! ${json.applied}`
+            : `Thank you! Your payment went through, but the pack couldn't be added to your plan yet. Redeem this code when it can: ${json.code}`,
+      );
+      await load();
+    }
+    void run();
+  }, [token, call, load]);
 
   useEffect(() => {
     if (!token) return;
@@ -266,6 +344,57 @@ export function AccountDashboard() {
       const key = json.key as OwnKey;
       setRevealed({ name: key.name, secret: json.token as string });
       setKeyName("");
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function buy(pack: Pack) {
+    setShopError(null);
+    setShopNotice(null);
+    setBusy(pack.id);
+    try {
+      const json = await call("POST", "/api/account/orders", { packId: pack.id }, setShopError);
+      if (json?.approveUrl) {
+        setShopNotice("Taking you to PayPal…");
+        window.location.href = json.approveUrl as string;
+        return;
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function checkAgain(order: Purchase) {
+    setShopError(null);
+    setBusy(order.id);
+    try {
+      const json = await call("PATCH", `/api/account/orders?id=${encodeURIComponent(order.id)}`, { action: "finish" }, setShopError);
+      if (json) {
+        setShopNotice(json.status === "pending" ? "It still hasn't cleared." : (json.applied as string) ?? "Paid.");
+        await load();
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function redeemCode(e: FormEvent) {
+    e.preventDefault();
+    setRedeemError(null);
+    setRedeemed(null);
+    setBusy("redeem");
+    try {
+      const json = await call(
+        "POST",
+        "/api/account/redeem",
+        { code: codeText },
+        setRedeemError,
+      );
+      if (!json) return;
+      setRedeemed(json.applied as string);
+      setCodeText("");
       await load();
     } finally {
       setBusy(null);
@@ -485,8 +614,9 @@ export function AccountDashboard() {
             </div>
             {plan.status === "pending" ? (
               <p className={styles.sectionDesc}>
-                Your account is waiting to be activated. Once the admin sets
-                what it can use, you can make API keys here.
+                Your account is waiting to be activated. Redeem a code below,
+                or wait for the admin to set what it can use; then you can
+                make API keys here.
               </p>
             ) : (
               <>
@@ -529,6 +659,142 @@ export function AccountDashboard() {
               </>
             )}
           </section>
+
+          <section className={styles.section}>
+            <div className={styles.sectionHeader}>
+              <span className={styles.sectionTitle}>Redeem a code</span>
+            </div>
+            <p className={styles.sectionDesc}>
+              {plan.status === "pending"
+                ? "Have a code? It activates your account."
+                : "A plan code renews or changes your plan; a top-up code adds to it."}
+            </p>
+            <form onSubmit={redeemCode} className={styles.inlineForm}>
+              <input
+                value={codeText}
+                onChange={(e) => setCodeText(e.target.value)}
+                placeholder="XXXX-XXXX-XXXX"
+                className={`${styles.input} ${styles.mono}`}
+                autoComplete="off"
+                spellCheck={false}
+                maxLength={60}
+                aria-label="Code"
+              />
+              <button
+                type="submit"
+                className={styles.button}
+                disabled={busy !== null || !codeText.trim()}
+              >
+                {busy === "redeem" ? "Redeeming…" : "Redeem"}
+              </button>
+            </form>
+            {redeemError && <div className={styles.alert}>{redeemError}</div>}
+            {redeemed && (
+              <div className={styles.reveal} style={{ marginBottom: 0 }}>
+                <div className={styles.revealLabel} style={{ marginBottom: 0 }}>
+                  {redeemed}
+                </div>
+              </div>
+            )}
+          </section>
+
+          {shop && (shop.packs.length > 0 || shop.orders.length > 0 || shopNotice || shopError) && (
+            <section className={styles.section}>
+              <div className={styles.sectionHeader}>
+                <span className={styles.sectionTitle}>Buy tokens</span>
+                {shop.payments.configured && !shop.payments.live && (
+                  <span className={`${styles.badge} ${styles.badgeWarning}`}>Test payments</span>
+                )}
+              </div>
+              <p className={styles.sectionDesc}>
+                Prepaid tokens at half the market price or less, paid with
+                PayPal and added to your plan at once. Buying another pack adds
+                to what you have left.
+              </p>
+              {shopNotice && (
+                <div className={styles.reveal}>
+                  <div className={styles.revealLabel} style={{ marginBottom: 0 }}>
+                    {shopNotice}
+                  </div>
+                </div>
+              )}
+              {shopError && (
+                <div className={styles.alert} style={{ marginBottom: 16 }}>
+                  {shopError}
+                </div>
+              )}
+              {shop.packs.length > 0 && (
+                <div className={styles.packGrid}>
+                  {shop.packs.map((p) => (
+                    <div key={p.id} className={styles.packCard}>
+                      <div className={styles.strong}>{p.name}</div>
+                      {p.description && <div className={styles.cellNote}>{p.description}</div>}
+                      <div className={styles.packPrice}>{usd(p.priceCents)}</div>
+                      <div className={styles.packFacts}>
+                        {formatCount(p.tokens)} tokens ·{" "}
+                        {p.providers ? p.providers.map((id) => LABELS.get(id) ?? id).join(", ") : "every provider"}
+                        {p.days ? ` · ${p.days} days` : ""}
+                      </div>
+                      {p.pricing.marketCents !== null && (
+                        <div className={styles.cellNote}>
+                          <s>{usd(Math.round(p.pricing.marketCents))}</s> at market price ·{" "}
+                          {p.pricing.savingPercent}% less
+                        </div>
+                      )}
+                      <div className={styles.packBuy}>
+                        <button
+                          type="button"
+                          className={`${styles.button} ${styles.buttonFull}`}
+                          disabled={busy !== null || !shop.payments.configured || plan.status === "disabled"}
+                          onClick={() => buy(p)}
+                        >
+                          {busy === p.id ? "Opening PayPal…" : "Buy with PayPal"}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {!shop.payments.configured && shop.packs.length > 0 && (
+                <p className={styles.fieldHint} style={{ marginTop: 10 }}>
+                  Payments aren&apos;t open yet. Check back soon.
+                </p>
+              )}
+              {shop.orders.length > 0 && (
+                <>
+                  <div className={styles.sectionHeader} style={{ marginTop: 20 }}>
+                    <span className={styles.sectionTitle}>Your purchases</span>
+                  </div>
+                  <div className={styles.tableWrap} style={{ marginTop: 8 }}>
+                    <table className={styles.table}>
+                      <tbody>
+                        {shop.orders.map((o) => (
+                          <tr key={o.id}>
+                            <td className={styles.dim}>{new Date(o.paidAt ?? o.createdAt).toLocaleDateString()}</td>
+                            <td>{o.packName}</td>
+                            <td>{usd(o.priceCents)}</td>
+                            <td>
+                              {o.status === "pending" ? (
+                                <button type="button" className={styles.buttonGhost} disabled={busy !== null} onClick={() => checkAgain(o)}>
+                                  Clearing: check again
+                                </button>
+                              ) : o.applied ? (
+                                <span className={styles.dim}>Added to your plan</span>
+                              ) : (
+                                <span>
+                                  Code to redeem: <span className={styles.mono}>{o.code}</span>
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </section>
+          )}
 
           <section className={styles.section}>
             <div className={styles.sectionHeader}>

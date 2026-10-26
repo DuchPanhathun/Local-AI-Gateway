@@ -1,5 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, renameSync } from "node:fs";
+import type { RedeemCode } from "./redeem-codes";
+import type { Shop } from "./shop";
 import { statePath, writeJsonAtomic, writeJsonAtomicSync } from "./state-files";
 
 // Access tokens: API keys for other people and apps, and the accounts of the
@@ -82,13 +84,15 @@ export type Account = Allowance & {
   maxKeys: number;
 };
 
-type TokenFile = {
+export type TokenFile = {
   version: 1;
   // Tokens from when ai-thun ran on Vercel were kept in Edge Config; they're
   // brought over once.
   importedFromEdgeConfig: boolean;
   tokens: ApiToken[];
   accounts: Account[];
+  codes: RedeemCode[]; // lib/redeem-codes.ts
+  shop?: Shop; // lib/shop.ts fills it in
 };
 
 type Store = {
@@ -167,7 +171,7 @@ function normalizeAccount(a: Partial<Account>): Account {
 }
 
 function emptyFile(): TokenFile {
-  return { version: 1, importedFromEdgeConfig: false, tokens: [], accounts: [] };
+  return { version: 1, importedFromEdgeConfig: false, tokens: [], accounts: [], codes: [] };
 }
 
 function load(): TokenFile {
@@ -188,6 +192,8 @@ function load(): TokenFile {
       importedFromEdgeConfig: Boolean(data.importedFromEdgeConfig),
       tokens: data.tokens.map(normalize),
       accounts: (data.accounts ?? []).map(normalizeAccount),
+      codes: Array.isArray(data.codes) ? data.codes : [],
+      ...(data.shop ? { shop: data.shop } : {}),
     };
   } catch (err) {
     // Set the unreadable file aside rather than overwrite it on the next save.
@@ -847,6 +853,20 @@ export async function updateAccount(user: { id: string; email: string }, changes
   Object.assign(account, draft);
   await saveNow(s);
   return account;
+}
+
+// For lib/redeem-codes.ts, which keeps its codes in this file: the file as
+// it is, and a change to it, saved before it's answered. `change` must check
+// everything before it changes anything: when it throws, nothing is saved.
+export async function readTokenFile(): Promise<TokenFile> {
+  return (await ready()).file;
+}
+
+export async function changeTokenFile<T>(change: (file: TokenFile) => T): Promise<T> {
+  const s = await ready();
+  const result = change(s.file);
+  await saveNow(s);
+  return result;
 }
 
 export async function accountKeys(userId: string): Promise<ApiToken[]> {

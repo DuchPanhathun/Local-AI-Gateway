@@ -36,6 +36,8 @@ const NAV: NavGroup[] = [
       { id: "providers", label: "Pause & resume" },
       { id: "tokens", label: "Access tokens" },
       { id: "users", label: "Users" },
+      { id: "codes", label: "Redeem codes" },
+      { id: "shop", label: "Shop" },
       { id: "health", label: "CLI health" },
       { id: "limits", label: "CLI plan limits" },
     ],
@@ -717,6 +719,8 @@ export default function DocumentsPage() {
                 [<code key="e">GET, PATCH /api/providers</code>, <Yes key="o" />, <No key="t" />],
                 [<code key="e">GET, POST, PATCH, DELETE /api/tokens</code>, <Yes key="o" />, <No key="t" />],
                 [<code key="e">GET, PATCH /api/users</code>, <Yes key="o" />, <No key="t" />],
+                [<code key="e">GET, POST, PATCH, DELETE /api/codes</code>, <Yes key="o" />, <No key="t" />],
+                [<code key="e">GET, POST, PATCH, DELETE /api/shop</code>, <Yes key="o" />, <No key="t" />],
                 [<code key="e">GET /api/local-agent/health, /api/local-agent/limits</code>, <Yes key="o" />, <No key="t" />],
               ]}
             />
@@ -1075,6 +1079,63 @@ export default function DocumentsPage() {
                 ["limits, expiresAt, providers, agentTools, disabled, note", "", <>The account’s plan, which all its keys share: the same fields as an access token’s (see <a href="#tokens">Access tokens</a>), and <code>addTokens</code>, <code>addRequests</code>, <code>extendDays</code>.</>],
                 ["maxKeys", "number", "How many keys the user may make. Default 5."],
                 ["confirmEmail", "boolean", <><code>true</code>: confirm their email address, when Supabase’s email didn’t reach them.</>],
+              ]}
+            />
+          </Section>
+
+          <Section id="codes" title="Redeem codes">
+            <Endpoint method="GET" path="/api/codes" owner />
+            <Endpoint method="POST" path="/api/codes" owner />
+            <Endpoint method="PATCH" path="/api/codes?id=…" owner />
+            <Endpoint method="DELETE" path="/api/codes?id=…" owner />
+            <p>
+              Codes people redeem on their <Link href="/account">account page</Link>. A{" "}
+              <code>plan</code> code activates an account with its plan, or replaces and renews it
+              (its days count from the end of the current plan); a <code>topup</code> code adds to
+              an active plan. Each account can use a code once. <code>GET</code> lists every code
+              with its <code>status</code>, what it <code>gives</code> and who used it;{" "}
+              <code>PATCH</code> takes <code>disabled</code> and <code>note</code>. The console’s
+              Redeem codes page does the same.
+            </p>
+            <Fields
+              rows={[
+                ["kind", "string", <><code>plan</code> or <code>topup</code>.</>, true],
+                ["limits, providers, agentTools, maxKeys", "", <>A plan code’s plan, like an account’s (see <a href="#users">Users</a>). A prepaid (<code>total</code>) amount is that much more from redeeming.</>],
+                ["days", "number", "A plan code: how many days the plan lasts. Empty: no end."],
+                ["addTokens, addRequests, addDays", "number", "A top-up code: what it adds. Only what the plan has a limit or end date for is added."],
+                ["count", "number", "How many codes to make, 1 to 500. Default 1."],
+                ["maxUses", "number", "How many accounts can use each code. Default 1."],
+                ["expiresAt", "string", <>When the code stops working, like <code>2026-12-31</code>. Default: never.</>],
+                ["code", "string", "Your own text for a single code, like WELCOME-2026. Default: a random one, like K7QM-2XHD-9WPB."],
+                ["note", "string", "Your own note."],
+              ]}
+            />
+          </Section>
+
+          <Section id="shop" title="Shop">
+            <Endpoint method="GET" path="/api/shop" owner />
+            <Endpoint method="POST" path="/api/shop" owner />
+            <Endpoint method="PATCH" path="/api/shop?pack=…" owner />
+            <Endpoint method="DELETE" path="/api/shop?pack=…" owner />
+            <p>
+              Prepaid token packs people buy on their <Link href="/account">account page</Link>{" "}
+              with PayPal. <code>GET</code> returns the packs with their <code>pricing</code>, the
+              market prices, every order and whether payments are set up. A pack’s price can be at
+              most half of its tokens at the market price of the cheapest provider it covers.{" "}
+              <code>PATCH /api/shop</code> with <code>{`{"market": {"groq": {"input": 0.15, "output": 0.6}}}`}</code>{" "}
+              changes market prices (US dollars per million tokens). The console’s Shop page does
+              the same.
+            </p>
+            <Fields
+              rows={[
+                ["name", "string", "What buyers see it as.", true],
+                ["price", "number", "In US dollars, like 1.31. At most half the market value.", true],
+                ["tokens", "number", "How many tokens it gives, prepaid.", true],
+                ["providers", "string[]", <>The providers they work on. <code>null</code>: all of them (priced by the cheapest).</>],
+                ["days", "number", "How long they last. Empty: no end."],
+                ["perMinute, maxKeys, agentTools", "", <>As for an account’s plan (see <a href="#users">Users</a>).</>],
+                ["description", "string", "A line buyers see under the name."],
+                ["active", "boolean", <><code>false</code> takes it off sale.</>],
               ]}
             />
           </Section>

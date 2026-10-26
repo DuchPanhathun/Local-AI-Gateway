@@ -1244,6 +1244,42 @@
   gap: 6px;
 }
 
+/* ---------- Shop (on /account) ---------- */
+
+.packGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.packCard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.packPrice {
+  font-size: 1.6rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  margin-top: 6px;
+}
+
+.packFacts {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+/* Down at the bottom, so cards in a row line their buttons up. */
+.packBuy {
+  margin-top: auto;
+  padding-top: 12px;
+}
+
 /* ---------- Progress bars ---------- */
 
 .progressLabel {

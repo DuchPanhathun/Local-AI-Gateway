@@ -13,6 +13,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase-browser";
 import { ApiKeys, type KeySummary } from "./api-keys";
+import { Codes } from "./codes";
 import { Logo } from "./logo";
 import styles from "./page.module.css";
 import {
@@ -22,6 +23,7 @@ import {
   PROVIDER_OPTIONS,
   type ChatProvider,
 } from "./providers";
+import { Shop } from "./shop";
 import { getThemePref, setThemePref, subscribeTheme, type ThemePref } from "./theme";
 import { CopyButton, dayLabel, formatCount, monthLabel, ProgressBar } from "./ui";
 import { Users } from "./users";
@@ -176,7 +178,7 @@ type ChatMessage = {
   isError?: boolean;
 };
 
-type View = "dashboard" | "playground" | "api-keys" | "users" | "analytics" | "manage";
+type View = "dashboard" | "playground" | "api-keys" | "users" | "codes" | "shop" | "analytics" | "manage";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -219,6 +221,20 @@ const NAV_ITEMS: {
       "People with accounts: activate them with a plan, top them up, and see what each one uses.",
   },
   {
+    id: "codes",
+    label: "Redeem codes",
+    icon: "ticket",
+    description:
+      "Codes to sell or give away: a plan code activates or renews an account, a top-up adds to it.",
+  },
+  {
+    id: "shop",
+    label: "Shop",
+    icon: "cart",
+    description:
+      "Token packs people buy with PayPal, at half the market price or less, and their orders.",
+  },
+  {
     id: "analytics",
     label: "Analytics",
     icon: "analytics",
@@ -257,6 +273,8 @@ type IconName =
   | "playground"
   | "key"
   | "users"
+  | "ticket"
+  | "cart"
   | "analytics"
   | "manage"
   | "logout"
@@ -301,6 +319,21 @@ const ICON_PATHS: Record<IconName, ReactNode> = {
       <circle cx="9" cy="7" r="4" />
       <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
       <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </>
+  ),
+  ticket: (
+    <>
+      <path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z" />
+      <path d="M13 5v2" />
+      <path d="M13 17v2" />
+      <path d="M13 11v2" />
+    </>
+  ),
+  cart: (
+    <>
+      <circle cx="8" cy="21" r="1" />
+      <circle cx="19" cy="21" r="1" />
+      <path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12" />
     </>
   ),
   analytics: (
@@ -2931,6 +2964,8 @@ export default function Dashboard() {
         {view === "playground" && playgroundView}
         {view === "api-keys" && apiKeysView}
         {view === "users" && <Users providers={PROVIDER_OPTIONS} />}
+        {view === "codes" && <Codes providers={PROVIDER_OPTIONS} />}
+        {view === "shop" && <Shop providers={PROVIDER_OPTIONS} />}
         {view === "analytics" && analyticsView}
         {view === "manage" && manageView}
       </main>

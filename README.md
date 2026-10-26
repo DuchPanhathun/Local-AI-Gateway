@@ -42,6 +42,9 @@ Fill in `.env`:
   that are admins; nobody else is. The first two are public by design and are built into
   the pages, so they must be set when you run `npm run build`. The service role key bypasses all of
   Supabase's security: never give it a `NEXT_PUBLIC_` name, which would put it in the pages too.
+- `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` (optional) — open the shop's payments (see **Shop**
+  below), from developer.paypal.com → Apps & Credentials. `PAYPAL_ENV=live` for real money; anything
+  else is PayPal's sandbox.
 - `EDGE_CONFIG` (optional, once) — where access tokens were kept when ai-thun ran on Vercel. If
   it's set, tokens still there are brought over to the state folder the first time they're needed
   (see **Access tokens** below); after that it, `EDGE_CONFIG_ID`, `VERCEL_TEAM_ID` and
@@ -414,6 +417,59 @@ tokens, so a request never waits on Supabase.
   list; the owner key's is a week), or is let straight in when they're already signed in on
   `/account`. Anyone else who signs in there is sent to `/account`. The owner key still works:
   **Or use the owner key**.
+
+**Redeem codes** let people activate or top up their own account, so you sell codes instead of
+activating each person by hand. Make them on the console's **Redeem codes** page, one or a batch
+of up to 500 (random, like `K7QM-2XHD-9WPB`, or your own text for a single promotion code), each
+usable by one account or by several, with an optional date the code stops working:
+
+- A **plan code** activates the account with its plan (limits, providers, agent access, max keys)
+  for some days, or no end. On an account that already has a plan it replaces it and renews it:
+  its days count from the end of the current plan. A prepaid ("in total") amount is that much more
+  from now, whatever the account used before.
+- A **top-up code** adds tokens, requests or days to an active plan (only what the plan has a limit
+  or end date for). On a daily or monthly plan, added tokens raise every period's allowance, so
+  sell top-ups with prepaid plans.
+
+People type a code on `/account` (**Redeem a code**). Each account can use a code once; 10 wrong
+codes in 10 minutes lock redeeming for 15. The Redeem codes page shows each code's status
+(unused, partly used, used, expired, off) and who used it, and turns codes off or deletes them;
+deleting a used code leaves what it gave. Codes are kept in `tokens.json` with the accounts, in
+plain text so you can copy them again. The API: `GET`, `POST`, `PATCH ?id=` (`{"disabled"}`,
+`{"note"}`) and `DELETE ?id=` on `/api/codes` (owner), and `POST /api/account/redeem
+{"code": "…"}` (the signed-in user); see `/documents`.
+
+### Shop (PayPal)
+
+People with an account can buy prepaid token packs on `/account` (**Buy tokens**) and pay with
+PayPal; the tokens are on their account as soon as PayPal takes the payment. You make the packs on
+the console's **Shop** page: a number of tokens, the providers they work on, how many days they last
+(or no end), requests a minute, max keys, and a price in US dollars.
+
+**A pack costs at most half the market price.** The Shop page keeps a market price for each
+provider: what its default model costs per million tokens elsewhere (October 2026 list prices,
+blended 3 tokens in to 1 out, as price trackers do), which you can edit. A pack's price can't be
+saved above half of its tokens at the market price of the **cheapest** provider it covers, so it's
+half price or less whichever provider the tokens are spent on. The form shows the market value and
+the most you can ask, as you type. When you lower a market price, a pack it puts over the limit
+leaves the shop until you lower its price too.
+
+Packs add up: buying another pack for the same providers (or fewer) adds its tokens to what's left,
+and its days to the end date; buying never takes time away. A pack for other providers would replace
+what's left, so it's refused until those tokens are used up.
+
+How a payment goes (PayPal's Orders API, redirect, no PayPal script on our pages): the buyer clicks
+**Buy with PayPal**, approves the payment on PayPal, and comes back to `/account`, where the order is
+captured. A paid order becomes a single-use redeem code that's redeemed on their account at once (or,
+if it can't be yet, shown to them to redeem later), so a payment is never lost; the codes appear on
+the Redeem codes page with the PayPal order id. The capture is checked against the order (amount,
+currency, buyer) and can safely be repeated. A payment PayPal holds until it clears (an eCheck) shows
+as **Clearing** under the buyer's purchases until they check again. An order they approve but never
+come back for isn't captured, so it costs them nothing. The Shop page lists every order. Packs,
+market prices and orders are kept in `tokens.json`.
+
+PayPal takes its fee from each payment, about 3.5% plus a fixed amount, so very small packs earn
+little. Refunds are done in PayPal; take the tokens back with the user's **Turn off** or plan.
 
 Set up in Supabase (**Authentication → URL Configuration**): **Site URL**
 `https://thun-murex.duchpanhathun.com`, and under **Redirect URLs**

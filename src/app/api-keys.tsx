@@ -95,6 +95,7 @@ export type Draft = {
   requests: string;
   perMinute: string;
   expires: string; // a date in this browser's time zone; empty for never
+  days: string; // redeem codes: how long the plan lasts; empty for no end
   allProviders: boolean;
   providers: string[];
   agentTools: boolean;
@@ -109,6 +110,7 @@ const EMPTY_DRAFT: Draft = {
   requests: "",
   perMinute: "",
   expires: "",
+  days: "",
   allProviders: true,
   providers: [],
   agentTools: false,
@@ -163,6 +165,7 @@ export function toDraft(k: DraftSource): Draft {
     requests: amountText(k.limits.requests),
     perMinute: amountText(k.limits.perMinute),
     expires: dateInput(k.expiresAt),
+    days: "",
     allProviders: k.providers === null,
     providers: k.providers ?? [],
     agentTools: k.agentTools,
@@ -209,18 +212,22 @@ export function fromDraft(
 }
 
 // `account`: an account's plan, which has no name but a number of keys.
+// `lasts`: a redeem code's plan, which lasts some days from redeeming
+// instead of ending on a date.
 export function KeyFields({
   id,
   draft,
   setDraft,
   providers,
   account = false,
+  lasts = false,
 }: {
   id: string;
   draft: Draft;
   setDraft: (d: Draft) => void;
   providers: ProviderOption[];
   account?: boolean;
+  lasts?: boolean;
 }) {
   const set = <K extends keyof Draft>(field: K, value: Draft[K]) =>
     setDraft({ ...draft, [field]: value });
@@ -322,21 +329,40 @@ export function KeyFields({
       </p>
 
       <div className={styles.twoCol}>
-        <div className={styles.field}>
-          <label className={styles.label} htmlFor={`${id}-expires`}>
-            Expires
-          </label>
-          <input
-            id={`${id}-expires`}
-            type="date"
-            className={styles.input}
-            value={draft.expires}
-            onChange={(e) => set("expires", e.target.value)}
-          />
-          <span className={styles.fieldHint}>
-            Empty: never. It works to the end of that day.
-          </span>
-        </div>
+        {lasts ? (
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor={`${id}-days`}>
+              Lasts (days)
+            </label>
+            <input
+              id={`${id}-days`}
+              className={styles.input}
+              inputMode="numeric"
+              value={draft.days}
+              onChange={(e) => set("days", e.target.value)}
+              placeholder="No end, or e.g. 30"
+            />
+            <span className={styles.fieldHint}>
+              From redeeming, or from the end of the plan it renews.
+            </span>
+          </div>
+        ) : (
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor={`${id}-expires`}>
+              Expires
+            </label>
+            <input
+              id={`${id}-expires`}
+              type="date"
+              className={styles.input}
+              value={draft.expires}
+              onChange={(e) => set("expires", e.target.value)}
+            />
+            <span className={styles.fieldHint}>
+              Empty: never. It works to the end of that day.
+            </span>
+          </div>
+        )}
       </div>
 
       <div className={styles.field}>
