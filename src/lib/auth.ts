@@ -7,7 +7,8 @@
 // outright unless APP_API_KEY is set.
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { NextRequest } from "next/server";
-import { admit, findKey, type ApiToken } from "./api-tokens";
+import { admit, allowanceOf, findKey, type ApiToken } from "./api-tokens";
+import { isAdminId } from "./supabase";
 
 export type Access =
   | { ok: true; who: "owner" }
@@ -105,19 +106,24 @@ const sign = (appKey: string, payload: string) =>
     .update(payload)
     .digest("base64url");
 
-export function makeSession(appKey: string, now = Date.now()): string {
-  const payload = `v1.${Math.floor(now / 1000) + SESSION_SECONDS}`;
+// The owner key's session is "v1.<expiry>". An admin's account's is
+// "v2.<expiry>.<user id>", good only while that id is in ADMIN_USER_IDS:
+// taking someone off the list ends their console access at once.
+export function makeSession(appKey: string, now = Date.now(), seconds = SESSION_SECONDS, userId?: string): string {
+  const expiry = Math.floor(now / 1000) + seconds;
+  const payload = userId ? `v2.${expiry}.${userId}` : `v1.${expiry}`;
   return `${payload}.${sign(appKey, payload)}`;
 }
 
 export function validSession(value: string | undefined, appKey: string, now = Date.now()): boolean {
-  const m = /^(v1\.(\d+))\.([\w-]+)$/.exec(value ?? "");
-  if (!m || Number(m[2]) * 1000 <= now) return false;
-  return sameSecret(m[3], sign(appKey, m[1]));
+  const m = /^(v1\.(\d+)|v2\.(\d+)\.([0-9a-f-]{36}))\.([\w-]+)$/.exec(value ?? "");
+  if (!m || Number(m[2] ?? m[3]) * 1000 <= now) return false;
+  if (!sameSecret(m[5], sign(appKey, m[1]))) return false;
+  return m[4] === undefined || isAdminId(m[4]);
 }
 
 // Set-Cookie for the sign-in (or, with no value, for signing out).
-export function sessionCookie(req: NextRequest, value: string | null): string {
+export function sessionCookie(req: NextRequest, value: string | null, seconds = SESSION_SECONDS): string {
   const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? "";
   const local = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host) && req.headers.get("x-forwarded-proto") !== "https";
   return [
@@ -125,7 +131,7 @@ export function sessionCookie(req: NextRequest, value: string | null): string {
     "Path=/",
     "HttpOnly",
     "SameSite=Strict",
-    `Max-Age=${value ? SESSION_SECONDS : 0}`,
+    `Max-Age=${value ? seconds : 0}`,
     ...(local ? [] : ["Secure"]),
   ].join("; ");
 }
@@ -138,7 +144,7 @@ export function sessionCookie(req: NextRequest, value: string | null): string {
 // replaces them with its own name. So Origin is only the fallback, for
 // browsers too old to send Sec-Fetch-Site, with the public addresses in
 // PUBLIC_ORIGINS ("https://thun-murex.duchpanhathun.com").
-function sameOrigin(req: NextRequest): boolean {
+export function sameOrigin(req: NextRequest): boolean {
   const site = req.headers.get("sec-fetch-site");
   if (site) return site === "same-origin";
   const origin = req.headers.get("origin");
@@ -154,6 +160,11 @@ function sameOrigin(req: NextRequest): boolean {
 }
 
 const CHANGES = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+// The address to give key holders: the first of PUBLIC_ORIGINS.
+export function publicOrigin(): string | null {
+  return (process.env.PUBLIC_ORIGINS ?? "").split(",").map((o) => o.trim()).find(Boolean) ?? null;
+}
 
 // ---------------------------------------------------------------------------
 
@@ -222,21 +233,25 @@ export function keyRule(
 ): KeyRule {
   if (access.who === "owner") return { refused: null, sandboxed: false };
   const { key } = access;
-  if (key.providers && !key.providers.includes(provider)) {
-    const allowed = key.providers.length ? `It can use ${key.providers.join(", ")}.` : "It can't use any provider.";
+  // An account's key goes by its account's providers and agent access.
+  const allowance = allowanceOf(key);
+  if (!allowance) return { refused: "This API key's account no longer exists.", sandboxed: true, caller: key.id };
+  const { providers, agentTools } = allowance;
+  if (providers && !providers.includes(provider)) {
+    const allowed = providers.length ? `It can use ${providers.join(", ")}.` : "It can't use any provider.";
     return { refused: `This API key can't use ${provider}. ${allowed}`, sandboxed: true, caller: key.id };
   }
-  if (!key.agentTools && image) {
+  if (!agentTools && image) {
     return { refused: "This API key can't generate images: that runs Codex on the server with its tools.", sandboxed: true, caller: key.id };
   }
-  if (!key.agentTools && HOST_AGENTS.has(provider) && !TOOL_FREE.has(provider)) {
+  if (!agentTools && HOST_AGENTS.has(provider) && !TOOL_FREE.has(provider)) {
     return {
       refused: `This API key can't use ${provider}: it only runs with its tools, which read files on the server.`,
       sandboxed: true,
       caller: key.id,
     };
   }
-  return { refused: null, sandboxed: !key.agentTools, caller: key.id };
+  return { refused: null, sandboxed: !agentTools, caller: key.id };
 }
 
 // Sign-in with the owner key, for /api/session: the lockout counts here too.

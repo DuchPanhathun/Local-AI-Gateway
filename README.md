@@ -37,6 +37,11 @@ Fill in `.env`:
   revoke API tokens (see below). Leave it blank to disable auth entirely (not recommended once the
   URL is public).
 - `ALLOWED_ORIGIN` (optional) — restrict CORS to one caller's origin instead of `*`.
+- `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (optional) —
+  turn on accounts (see **Accounts** below). `ADMIN_USER_IDS` — the Supabase user ids (comma-separated)
+  that are admins; nobody else is. The first two are public by design and are built into
+  the pages, so they must be set when you run `npm run build`. The service role key bypasses all of
+  Supabase's security: never give it a `NEXT_PUBLIC_` name, which would put it in the pages too.
 - `EDGE_CONFIG` (optional, once) — where access tokens were kept when ai-thun ran on Vercel. If
   it's set, tokens still there are brought over to the state folder the first time they're needed
   (see **Access tokens** below); after that it, `EDGE_CONFIG_ID`, `VERCEL_TEAM_ID` and
@@ -383,6 +388,45 @@ move it), next to the usage ledger, so restarts and deploys keep them; the owner
 saved before they're answered, usage a second after each request. Tokens made before this (in
 Vercel Edge Config) are brought over the first time they're needed, with no limits and the agent
 access they had then, if `EDGE_CONFIG` is still set.
+
+## Accounts (Supabase)
+
+People can have their own account: they sign up at **`/account`** with an email and password,
+and once you activate it, make their own API keys there and watch what they use. You manage them
+on the console's **Users** page. Supabase does the signing up and in (its Auth only, no tables);
+what each account may use, its keys and its usage live in `tokens.json` with the other access
+tokens, so a request never waits on Supabase.
+
+- **A new account waits.** Its holder sees "waiting to be activated" and can't make keys. On
+  **Users → Manage** you give it a plan: limits (tokens and requests per day, month or in total,
+  requests a minute), an expiry date, providers, agent access and how many keys it may have, and
+  **Save and activate**. Every key of the account shares the plan and its usage, which stays when
+  a key is deleted, so deleting keys doesn't reset anything.
+- **Then, as for a key you make:** **Turn off**, **+30 days**, **Add tokens**, and each of their
+  keys can be turned off or deleted. **Confirm their email** helps when Supabase's confirmation
+  email doesn't arrive. Their dashboard shows the plan, what's used and left, their keys
+  (make, renew, delete) and usage by day and model; your note on the account isn't shown to them.
+- **Admins** are the Supabase user ids in `ADMIN_USER_IDS` in the server's `.env`, and nobody
+  else: not a role stored in Supabase, and nothing in the app (or the API, or anyone with the
+  service role key) can add one, so no one can make themselves an admin. Adding one means editing
+  that line and restarting ai-thun. An admin signs in to the console with their email and
+  password (a 12-hour session, which names them, so it ends as soon as they're taken off the
+  list; the owner key's is a week), or is let straight in when they're already signed in on
+  `/account`. Anyone else who signs in there is sent to `/account`. The owner key still works:
+  **Or use the owner key**.
+
+Set up in Supabase (**Authentication → URL Configuration**): **Site URL**
+`https://thun-murex.duchpanhathun.com`, and under **Redirect URLs**
+`https://thun-murex.duchpanhathun.com/account` (plus any other address you open the console at).
+Confirmation and password-reset emails link there; without it they point at `localhost:3000`.
+Supabase's built-in email sender only sends a few emails an hour: for real sign-ups, set your own
+SMTP server under **Authentication → Emails**, or confirm people from the Users page.
+
+The account API, for the dashboard's own page (`Authorization: Bearer <Supabase access token>`):
+`GET /api/account?month=YYYY-MM`, and `POST`, `PATCH ?id=` (`{"name"}` or `{"rotate": true}`) and
+`DELETE ?id=` on `/api/account/keys`. The owner's: `GET /api/users`, `GET /api/users?id=…&month=…`
+and `PATCH /api/users?id=…` (the plan's fields, as for `/api/tokens`, plus `activate`, `maxKeys`
+and `confirmEmail`); see `/documents`.
 
 ## Deploying (self-hosted on thun-latitude-7280, via Tailscale)
 

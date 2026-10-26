@@ -5,7 +5,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import styles from "./page.module.css";
-import { CopyButton, dayLabel, formatCount, monthLabel, ProgressBar } from "./ui";
+import { CopyButton, formatCount, ProgressBar, UsagePanel, type MonthUsage } from "./ui";
 
 // ---------------------------------------------------------------------------
 // Types, as /api/tokens sends them
@@ -20,13 +20,15 @@ type KeyCounts = {
   estimatedTokens: number;
 };
 
+export type KeyStatus = "active" | "pending" | "disabled" | "expired" | "limited";
+
 export type KeySummary = {
   id: string;
   name: string;
   note: string;
   hint: string;
   createdAt: string;
-  status: "active" | "disabled" | "expired" | "limited";
+  status: KeyStatus;
   disabled: boolean;
   expiresAt: string | null;
   limits: {
@@ -46,12 +48,7 @@ export type KeySummary = {
 
 type KeyDetail = {
   token: KeySummary;
-  usage: {
-    month: string;
-    totals: KeyCounts;
-    days: { day: string; requests: number; tokens: number }[];
-    models: (KeyCounts & { provider: string; model: string })[];
-  };
+  usage: MonthUsage;
   months: string[];
 };
 
@@ -69,11 +66,12 @@ const PERIOD_USED: Record<Period, string> = {
   total: "in total",
 };
 
-const STATUS_BADGES: Record<
-  KeySummary["status"],
+export const STATUS_BADGES: Record<
+  KeyStatus,
   { label: string; className: string }
 > = {
   active: { label: "Active", className: styles.badgeSuccess },
+  pending: { label: "Waiting", className: styles.badgeAccent },
   disabled: { label: "Off", className: "" },
   expired: { label: "Expired", className: styles.badgeDanger },
   limited: { label: "Used up", className: styles.badgeWarning },
@@ -88,8 +86,9 @@ const STATUS_BADGES: Record<
 const TOOL_ONLY = ["gemini", "antigravity"];
 
 // Its fields, as typed.
-type Draft = {
+export type Draft = {
   name: string;
+  maxKeys: string; // accounts only
   note: string;
   period: Period;
   tokens: string; // "1M", "500k", "250000"; empty for no limit
@@ -103,6 +102,7 @@ type Draft = {
 
 const EMPTY_DRAFT: Draft = {
   name: "",
+  maxKeys: "5",
   note: "",
   period: "month",
   tokens: "",
@@ -115,7 +115,7 @@ const EMPTY_DRAFT: Draft = {
 };
 
 // "1M" → 1000000, "2.5k" → 2500, "" → null (no limit); NaN for anything else.
-function parseAmount(text: string): number | null {
+export function parseAmount(text: string): number | null {
   const t = text.trim().replace(/[,_\s]/g, "");
   if (!t) return null;
   const m = /^(\d+(?:\.\d+)?)([kmb]?)$/i.exec(t);
@@ -126,7 +126,7 @@ function parseAmount(text: string): number | null {
   return Math.round(Number(m[1]) * scale);
 }
 
-function amountText(n: number | null): string {
+export function amountText(n: number | null): string {
   if (n === null) return "";
   if (n >= 1e6 && n % 1e6 === 0) return `${n / 1e6}M`;
   if (n >= 1e3 && n % 1e3 === 0) return `${n / 1e3}k`;
@@ -135,7 +135,7 @@ function amountText(n: number | null): string {
 
 // <input type="date"> is in this browser's time zone, and a key set to
 // expire on a day works to the end of that day here.
-function dateInput(iso: string | null): string {
+export function dateInput(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -146,9 +146,17 @@ function endOfDay(date: string): string {
   return new Date(y, m - 1, d, 23, 59, 59, 999).toISOString();
 }
 
-function toDraft(k: KeySummary): Draft {
+// What a form can be filled from: a key, or an account (no name, but a
+// number of keys).
+type DraftSource = Pick<
+  KeySummary,
+  "note" | "limits" | "expiresAt" | "providers" | "agentTools"
+> & { name?: string; maxKeys?: number };
+
+export function toDraft(k: DraftSource): Draft {
   return {
-    name: k.name,
+    name: k.name ?? "",
+    maxKeys: String(k.maxKeys ?? 5),
     note: k.note,
     period: k.limits.period,
     tokens: amountText(k.limits.tokens),
@@ -162,8 +170,9 @@ function toDraft(k: KeySummary): Draft {
 }
 
 // The request body for a draft, or why it can't be sent.
-function fromDraft(
+export function fromDraft(
   d: Draft,
+  { account = false }: { account?: boolean } = {},
 ): { body: Record<string, unknown> } | { error: string } {
   const limits: Record<string, number | null> = {};
   const fields = [
@@ -183,9 +192,13 @@ function fromDraft(
   if (!d.allProviders && d.providers.length === 0) {
     return { error: "Pick at least one provider, or allow them all." };
   }
+  const maxKeys = Number(d.maxKeys);
+  if (account && (!Number.isInteger(maxKeys) || maxKeys < 0 || maxKeys > 100)) {
+    return { error: "Max keys: a whole number from 0 to 100." };
+  }
   return {
     body: {
-      name: d.name,
+      ...(account ? { maxKeys } : { name: d.name }),
       note: d.note,
       limits: { period: d.period, ...limits },
       expiresAt: d.expires ? endOfDay(d.expires) : null,
@@ -195,16 +208,19 @@ function fromDraft(
   };
 }
 
-function KeyFields({
+// `account`: an account's plan, which has no name but a number of keys.
+export function KeyFields({
   id,
   draft,
   setDraft,
   providers,
+  account = false,
 }: {
   id: string;
   draft: Draft;
   setDraft: (d: Draft) => void;
   providers: ProviderOption[];
+  account?: boolean;
 }) {
   const set = <K extends keyof Draft>(field: K, value: Draft[K]) =>
     setDraft({ ...draft, [field]: value });
@@ -234,19 +250,34 @@ function KeyFields({
   return (
     <div className={styles.keyForm}>
       <div className={styles.twoCol}>
-        <div className={styles.field}>
-          <label className={styles.label} htmlFor={`${id}-name`}>
-            Name
-          </label>
-          <input
-            id={`${id}-name`}
-            className={styles.input}
-            value={draft.name}
-            onChange={(e) => set("name", e.target.value)}
-            placeholder="Who or what it's for"
-            maxLength={100}
-          />
-        </div>
+        {account ? (
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor={`${id}-max-keys`}>
+              Max keys
+            </label>
+            <input
+              id={`${id}-max-keys`}
+              className={styles.input}
+              inputMode="numeric"
+              value={draft.maxKeys}
+              onChange={(e) => set("maxKeys", e.target.value)}
+            />
+          </div>
+        ) : (
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor={`${id}-name`}>
+              Name
+            </label>
+            <input
+              id={`${id}-name`}
+              className={styles.input}
+              value={draft.name}
+              onChange={(e) => set("name", e.target.value)}
+              placeholder="Who or what it's for"
+              maxLength={100}
+            />
+          </div>
+        )}
         <div className={styles.field}>
           <label className={styles.label} htmlFor={`${id}-note`}>
             Note (only you see it)
@@ -286,7 +317,8 @@ function KeyFields({
       </div>
       <p className={styles.fieldHint}>
         Days and months are UTC. Failed requests don&apos;t count. In total
-        means a prepaid amount: add more to it from the key&apos;s page.
+        means a prepaid amount: add more to it with Add tokens.
+        {account && " Every key of the account shares these."}
       </p>
 
       <div className={styles.twoCol}>
@@ -375,7 +407,7 @@ function KeyFields({
 // Text
 // ---------------------------------------------------------------------------
 
-function limitsText(k: KeySummary): string {
+export function limitsText(k: Pick<KeySummary, "limits" | "expiresAt">): string {
   const { period, tokens, requests, perMinute } = k.limits;
   const amounts = [
     tokens !== null ? `${tokens.toLocaleString()} tokens` : null,
@@ -406,7 +438,7 @@ function holderMessage(
   ].join("\n");
 }
 
-function ago(iso: string | null, now: number): string {
+export function ago(iso: string | null, now: number): string {
   if (!iso) return "Never";
   const s = Math.max(0, (now - Date.parse(iso)) / 1000);
   if (s < 60) return "Just now";
@@ -416,7 +448,7 @@ function ago(iso: string | null, now: number): string {
   return new Date(iso).toLocaleDateString();
 }
 
-function expiryCell(iso: string | null, now: number) {
+export function expiryCell(iso: string | null, now: number) {
   if (!iso) return <span className={styles.dim}>Never</span>;
   const left = Date.parse(iso) - now;
   const date = new Date(iso).toLocaleDateString();
@@ -431,7 +463,7 @@ function expiryCell(iso: string | null, now: number) {
   return date;
 }
 
-function UsageCell({
+export function UsageCell({
   used,
   limit,
   note,
@@ -654,15 +686,7 @@ export function ApiKeys({
   }
 
   const todayUtc = new Date(now || 0).toISOString().slice(0, 10);
-  const usage = detail?.token.id === selectedId ? detail?.usage : null;
-  const peakDay = usage?.days.reduce<{ day: string; tokens: number } | null>(
-    (peak, d) => (d.tokens > (peak?.tokens ?? 0) ? d : peak),
-    null,
-  );
-  const monthOptions =
-    detail && detail.months.includes(detailMonth)
-      ? detail.months
-      : [detailMonth, ...(detail?.months ?? [])];
+  const usage = detail?.token.id === selectedId ? detail.usage : null;
 
   return (
     <>
@@ -943,140 +967,14 @@ export function ApiKeys({
             </div>
           </form>
 
-          <div className={styles.sectionHeader} style={{ marginTop: 8 }}>
-            <span className={styles.sectionTitle}>Usage</span>
-            <select
-              className={`${styles.select} ${styles.selectCompact}`}
-              value={detailMonth}
-              onChange={(e) => setDetailMonth(e.target.value)}
-              aria-label="Month"
-            >
-              {monthOptions.map((m) => (
-                <option key={m} value={m}>
-                  {monthLabel(m)}
-                </option>
-              ))}
-            </select>
-          </div>
-          {!usage ? (
-            <p className={styles.empty}>Loading…</p>
-          ) : (
-            <>
-              <div className={styles.usageSummary}>
-                {(
-                  [
-                    ["Tokens", usage.totals.tokens],
-                    ["Estimated tokens", usage.totals.estimatedTokens],
-                    ["Requests", usage.totals.requests - usage.totals.errors],
-                    ["Failed", usage.totals.errors],
-                  ] as const
-                ).map(([label, value]) => (
-                  <div key={label} className={styles.usageFigure}>
-                    <span
-                      className={styles.usageFigureValue}
-                      title={value.toLocaleString()}
-                    >
-                      {formatCount(value)}
-                    </span>
-                    <span className={styles.usageFigureLabel}>{label}</span>
-                  </div>
-                ))}
-              </div>
-
-              <div className={styles.chartHead}>
-                <span>Tokens per day (UTC)</span>
-                <span>
-                  {peakDay
-                    ? `Peak ${formatCount(peakDay.tokens)} on ${dayLabel(peakDay.day)}`
-                    : ""}
-                </span>
-              </div>
-              <div className={styles.chart}>
-                {usage.days.map((d) => {
-                  const future = d.day > todayUtc;
-                  const height = peakDay
-                    ? Math.max((d.tokens / peakDay.tokens) * 100, 2)
-                    : 0;
-                  return (
-                    <div
-                      key={d.day}
-                      className={styles.chartCol}
-                      title={
-                        future
-                          ? dayLabel(d.day)
-                          : `${dayLabel(d.day)}: ${d.tokens.toLocaleString()} tokens · ${d.requests.toLocaleString()} request${d.requests === 1 ? "" : "s"}`
-                      }
-                    >
-                      <div
-                        className={`${styles.chartBar} ${
-                          future
-                            ? styles.chartBarFuture
-                            : d.tokens
-                              ? ""
-                              : styles.chartBarEmpty
-                        } ${d.day === todayUtc ? styles.chartBarToday : ""}`}
-                        style={d.tokens ? { height: `${height}%` } : undefined}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-              <div className={styles.chartAxis}>
-                {usage.days.map((d, i) => (
-                  <span key={d.day}>
-                    {i % 7 === 0 ? Number(d.day.slice(8)) : ""}
-                  </span>
-                ))}
-              </div>
-
-              {usage.models.length > 0 ? (
-                <div className={styles.tableWrap}>
-                  <table className={styles.table}>
-                    <thead>
-                      <tr>
-                        <th>Model</th>
-                        <th>Provider</th>
-                        <th>Requests</th>
-                        <th>Failed</th>
-                        <th>Tokens</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {usage.models.map((m) => (
-                        <tr key={`${m.provider}:${m.model}`}>
-                          <td
-                            className={
-                              m.model === "default" ? styles.dim : styles.mono
-                            }
-                          >
-                            {m.model === "default" ? "CLI default" : m.model}
-                          </td>
-                          <td className={styles.dim}>
-                            {labels.get(m.provider) ?? m.provider}
-                          </td>
-                          <td>{(m.requests - m.errors).toLocaleString()}</td>
-                          <td>{m.errors.toLocaleString()}</td>
-                          <td>
-                            {m.tokens.toLocaleString()}
-                            {m.estimatedTokens > 0 && (
-                              <span className={styles.dim}>
-                                {" "}
-                                (≈{formatCount(m.estimatedTokens)} estimated)
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <p className={styles.empty}>
-                  No requests in {monthLabel(usage.month)}.
-                </p>
-              )}
-            </>
-          )}
+          <UsagePanel
+            usage={usage}
+            month={detailMonth}
+            months={detail?.months ?? []}
+            onMonth={setDetailMonth}
+            labels={labels}
+            today={todayUtc}
+          />
         </section>
       )}
     </>

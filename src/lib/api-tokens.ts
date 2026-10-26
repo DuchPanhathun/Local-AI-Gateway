@@ -2,28 +2,32 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, renameSync } from "node:fs";
 import { statePath, writeJsonAtomic, writeJsonAtomicSync } from "./state-files";
 
-// Access tokens: API keys for other people and apps, each with its own limits,
-// expiry, providers and usage, managed from the console's API keys page. Kept
-// in the state folder (tokens.json), like the usage ledger, so restarts and
-// deploys keep them. Only a SHA-256 hash of each key is stored: the key itself
-// is shown once, when it's made (or made again).
+// Access tokens: API keys for other people and apps, and the accounts of the
+// people who signed up (lib/supabase.ts). A key the owner makes on the API
+// keys page has its own limits, expiry, providers and usage. An account's
+// keys, which its holder makes on /account, share the account's: its plan,
+// set by the owner on the Users page, and its usage, which stays when a key
+// is deleted. Kept in the state folder (tokens.json), like the usage ledger,
+// so restarts and deploys keep them. Only a SHA-256 hash of each key is
+// stored: the key itself is shown once, when it's made (or made again).
 //
-// Usage is counted per key, UTC day, provider and model. Held in memory and
-// saved a second after each change and again on shutdown; changes the owner
-// makes are saved before they're answered.
+// Usage is counted per key (and account), UTC day, provider and model. Held
+// in memory and saved a second after each change and again on shutdown;
+// changes the owner makes are saved before they're answered.
 
 const TOKENS_FILE = statePath("tokens.json");
 const SAVE_DELAY_MS = 1_000;
 const KEEP_DAYS = 400; // per-day usage; the all-time totals are kept for good
 const KEY_PREFIX = "sk-ai-thun-";
 const IMPORT_RETRY_MS = 60_000;
+export const DEFAULT_MAX_KEYS = 5;
 
 export type Period = "day" | "month" | "total";
 export const PERIODS: readonly Period[] = ["day", "month", "total"];
 
 export type KeyLimits = {
   // What `tokens` and `requests` count over: the UTC day, the UTC month, or
-  // the key's whole life (a prepaid amount, topped up by raising it).
+  // all time (a prepaid amount, topped up by raising it).
   period: Period;
   tokens: number | null; // null: no limit
   requests: number | null;
@@ -41,13 +45,8 @@ type DayUsage = Counts & {
   providers: Record<string, Record<string, Counts>>; // provider → model → counts
 };
 
-export type ApiToken = {
-  id: string;
-  name: string;
-  note: string; // the owner's own: never shown to the key's holder
-  hash: string; // SHA-256 of the key, hex
-  hint: string; // "sk-ai-thun-ab12…cd34"
-  createdAt: string;
+// What a key may use, and what it has used: a key's own, or its account's.
+export type Allowance = {
   disabled: boolean;
   expiresAt: string | null;
   limits: KeyLimits;
@@ -62,12 +61,34 @@ export type ApiToken = {
   days: Record<string, DayUsage>;
 };
 
+export type ApiToken = Allowance & {
+  id: string;
+  name: string;
+  note: string; // the owner's own: never shown to the key's holder
+  hash: string; // SHA-256 of the key, hex
+  hint: string; // "sk-ai-thun-ab12…cd34"
+  createdAt: string;
+  // An account's key: the account's allowance applies, and this one's
+  // limits and expiry don't. It can still be turned off on its own.
+  userId: string | null;
+};
+
+export type Account = Allowance & {
+  userId: string; // the Supabase user
+  email: string; // as of the last time they signed in
+  note: string; // the owner's own
+  createdAt: string;
+  activatedAt: string | null; // null: waiting for the owner, and its keys don't work
+  maxKeys: number;
+};
+
 type TokenFile = {
   version: 1;
   // Tokens from when ai-thun ran on Vercel were kept in Edge Config; they're
   // brought over once.
   importedFromEdgeConfig: boolean;
   tokens: ApiToken[];
+  accounts: Account[];
 };
 
 type Store = {
@@ -78,7 +99,7 @@ type Store = {
   saving: Promise<void>;
   importing: Promise<void> | null;
   importRetryAt: number;
-  recent: Map<string, number[]>; // request times in the last minute, by key id
+  recent: Map<string, number[]>; // request times in the last minute, by key id or "account:<id>"
 };
 
 const DEFAULT_LIMITS: KeyLimits = { period: "month", tokens: null, requests: null, perMinute: null };
@@ -106,24 +127,47 @@ function newSecret(): string {
   return `${KEY_PREFIX}${randomBytes(24).toString("hex")}`;
 }
 
-// A key read from the file, with any field an older file lacks filled in.
+// An allowance read from the file, with any field an older file lacks filled in.
+function normalizeAllowance(a: Partial<Allowance>): Allowance {
+  return {
+    disabled: Boolean(a.disabled),
+    expiresAt: a.expiresAt ?? null,
+    limits: { ...DEFAULT_LIMITS, ...a.limits },
+    providers: Array.isArray(a.providers) ? a.providers : null,
+    agentTools: Boolean(a.agentTools),
+    lastUsedAt: a.lastUsedAt ?? null,
+    total: { ...emptyCounts(), ...a.total },
+    days: a.days ?? {},
+  };
+}
+
 function normalize(t: Partial<ApiToken>): ApiToken {
   return {
+    ...normalizeAllowance(t),
     id: String(t.id),
     name: t.name ?? "untitled",
     note: t.note ?? "",
     hash: String(t.hash),
     hint: t.hint ?? "",
     createdAt: t.createdAt ?? new Date(0).toISOString(),
-    disabled: Boolean(t.disabled),
-    expiresAt: t.expiresAt ?? null,
-    limits: { ...DEFAULT_LIMITS, ...t.limits },
-    providers: Array.isArray(t.providers) ? t.providers : null,
-    agentTools: Boolean(t.agentTools),
-    lastUsedAt: t.lastUsedAt ?? null,
-    total: { ...emptyCounts(), ...t.total },
-    days: t.days ?? {},
+    userId: t.userId ?? null,
   };
+}
+
+function normalizeAccount(a: Partial<Account>): Account {
+  return {
+    ...normalizeAllowance(a),
+    userId: String(a.userId),
+    email: a.email ?? "",
+    note: a.note ?? "",
+    createdAt: a.createdAt ?? new Date(0).toISOString(),
+    activatedAt: a.activatedAt ?? null,
+    maxKeys: typeof a.maxKeys === "number" ? a.maxKeys : DEFAULT_MAX_KEYS,
+  };
+}
+
+function emptyFile(): TokenFile {
+  return { version: 1, importedFromEdgeConfig: false, tokens: [], accounts: [] };
 }
 
 function load(): TokenFile {
@@ -134,7 +178,7 @@ function load(): TokenFile {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
       console.error(`Can't read ${TOKENS_FILE}:`, err);
     }
-    return { version: 1, importedFromEdgeConfig: false, tokens: [] };
+    return emptyFile();
   }
   try {
     const data = JSON.parse(raw) as Partial<TokenFile>;
@@ -143,6 +187,7 @@ function load(): TokenFile {
       version: 1,
       importedFromEdgeConfig: Boolean(data.importedFromEdgeConfig),
       tokens: data.tokens.map(normalize),
+      accounts: (data.accounts ?? []).map(normalizeAccount),
     };
   } catch (err) {
     // Set the unreadable file aside rather than overwrite it on the next save.
@@ -151,7 +196,7 @@ function load(): TokenFile {
       renameSync(TOKENS_FILE, aside);
     } catch {}
     console.error(`${TOKENS_FILE} isn't a token list; moved it to ${aside}:`, err);
-    return { version: 1, importedFromEdgeConfig: false, tokens: [] };
+    return emptyFile();
   }
 }
 
@@ -262,6 +307,10 @@ async function ready(): Promise<Store> {
   return s;
 }
 
+function accountIn(s: Store, userId: string): Account | null {
+  return s.file.accounts.find((a) => a.userId === userId) ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Checking a key
 // ---------------------------------------------------------------------------
@@ -273,6 +322,12 @@ export async function findKey(bearer: string): Promise<ApiToken | null> {
   // matches says nothing about the key.
   const hash = hashOf(bearer);
   return s.file.tokens.find((t) => t.hash === hash) ?? null;
+}
+
+// The allowance that applies to a key: its account's, or its own. Null for
+// an account's key whose account is gone.
+export function allowanceOf(key: ApiToken): Allowance | null {
+  return key.userId ? accountIn(store(), key.userId) : key;
 }
 
 function utcDay(now: Date): string {
@@ -288,13 +343,13 @@ export function resetsAt(period: Period, now = new Date()): string | null {
   return null;
 }
 
-// What the key has used in its current period.
-export function usedInPeriod(key: ApiToken, now = new Date()): Counts {
-  if (key.limits.period === "total") return { ...key.total };
+// What has been used in the current period.
+export function usedInPeriod(a: Allowance, now = new Date()): Counts {
+  if (a.limits.period === "total") return { ...a.total };
   const today = utcDay(now);
-  const prefix = key.limits.period === "day" ? today : today.slice(0, 7);
+  const prefix = a.limits.period === "day" ? today : today.slice(0, 7);
   const used = emptyCounts();
-  for (const [day, usage] of Object.entries(key.days)) {
+  for (const [day, usage] of Object.entries(a.days)) {
     if (day.startsWith(prefix)) addCounts(used, usage);
   }
   return used;
@@ -305,7 +360,7 @@ function counted(c: Counts): number {
   return c.requests - c.errors;
 }
 
-export type KeyStatus = "active" | "disabled" | "expired" | "limited";
+export type KeyStatus = "active" | "pending" | "disabled" | "expired" | "limited";
 
 export type KeyBlock = { status: 403 | 429; error: string; retryAfter?: number };
 
@@ -315,14 +370,15 @@ function whenUTC(iso: string): string {
   return `${dateFormat.format(new Date(iso))} UTC`;
 }
 
-// Why the key can't be used right now, or null when it can.
-export function blockOf(key: ApiToken, now = Date.now()): KeyBlock | null {
-  if (key.disabled) return { status: 403, error: "This API key is turned off." };
-  if (key.expiresAt && Date.parse(key.expiresAt) <= now) {
-    return { status: 403, error: `This API key expired on ${whenUTC(key.expiresAt)}.` };
+// Why the allowance can't be used right now, or null when it can. `noun`
+// names it in the message: "API key" or "account".
+export function blockOf(a: Allowance, now = Date.now(), noun = "API key"): KeyBlock | null {
+  if (a.disabled) return { status: 403, error: `This ${noun} is turned off.` };
+  if (a.expiresAt && Date.parse(a.expiresAt) <= now) {
+    return { status: 403, error: `This ${noun} expired on ${whenUTC(a.expiresAt)}.` };
   }
-  const { period, tokens, requests } = key.limits;
-  const used = usedInPeriod(key, new Date(now));
+  const { period, tokens, requests } = a.limits;
+  const used = usedInPeriod(a, new Date(now));
   const over =
     tokens !== null && used.tokens >= tokens
       ? `${tokens.toLocaleString("en")} tokens`
@@ -331,37 +387,48 @@ export function blockOf(key: ApiToken, now = Date.now()): KeyBlock | null {
         : null;
   if (!over) return null;
   const reset = resetsAt(period, new Date(now));
-  if (!reset) return { status: 429, error: `This API key has used all of its ${over}.` };
+  if (!reset) return { status: 429, error: `This ${noun} has used all of its ${over}.` };
   return {
     status: 429,
-    error: `This API key has used its ${over} for ${period === "day" ? "today" : "this month"}. They come back on ${whenUTC(reset)}.`,
+    error: `This ${noun} has used its ${over} for ${period === "day" ? "today" : "this month"}. They come back on ${whenUTC(reset)}.`,
     retryAfter: Math.ceil((Date.parse(reset) - now) / 1000),
   };
 }
 
-export function statusOf(key: ApiToken, now = Date.now()): KeyStatus {
-  if (key.disabled) return "disabled";
-  if (key.expiresAt && Date.parse(key.expiresAt) <= now) return "expired";
-  return blockOf(key, now) ? "limited" : "active";
+export function statusOf(a: Allowance, now = Date.now()): KeyStatus {
+  if ("activatedAt" in a && !(a as Account).activatedAt) return "pending";
+  if (a.disabled) return "disabled";
+  if (a.expiresAt && Date.parse(a.expiresAt) <= now) return "expired";
+  return blockOf(a, now) ? "limited" : "active";
 }
 
 // Lets one request through, or says why not. Counts it toward the
-// per-minute limit (held in memory: a restart forgives).
+// per-minute limit, which an account's keys share (held in memory: a restart
+// forgives).
 export function admit(key: ApiToken, now = Date.now()): KeyBlock | null {
-  const blocked = blockOf(key, now);
-  if (blocked) return blocked;
+  if (key.disabled) return { status: 403, error: "This API key is turned off." };
   const s = store();
-  const times = (s.recent.get(key.id) ?? []).filter((t) => t > now - 60_000);
-  const perMinute = key.limits.perMinute;
+  let allowance: Allowance = key;
+  if (key.userId) {
+    const account = accountIn(s, key.userId);
+    if (!account) return { status: 403, error: "This API key's account no longer exists." };
+    if (!account.activatedAt) return { status: 403, error: "This API key's account hasn't been activated yet." };
+    allowance = account;
+  }
+  const blocked = blockOf(allowance, now, key.userId ? "account" : "API key");
+  if (blocked) return blocked;
+  const bucket = key.userId ? `account:${key.userId}` : key.id;
+  const times = (s.recent.get(bucket) ?? []).filter((t) => t > now - 60_000);
+  const perMinute = allowance.limits.perMinute;
   if (perMinute !== null && times.length >= perMinute) {
-    s.recent.set(key.id, times);
+    s.recent.set(bucket, times);
     return {
       status: 429,
-      error: `This API key is limited to ${perMinute.toLocaleString("en")} requests a minute.`,
+      error: `This ${key.userId ? "account" : "API key"} is limited to ${perMinute.toLocaleString("en")} requests a minute.`,
       retryAfter: Math.max(1, Math.ceil((times[0] + 60_000 - now) / 1000)),
     };
   }
-  if (perMinute !== null) s.recent.set(key.id, [...times, now]);
+  if (perMinute !== null) s.recent.set(bucket, [...times, now]);
   return null;
 }
 
@@ -375,9 +442,23 @@ export function estimateTokens(chars: number): number {
   return Math.ceil(Math.max(0, chars) / 4);
 }
 
+function addUsage(a: Allowance, provider: string, model: string, used: Counts, now: Date): void {
+  const today = utcDay(now);
+  if (!a.days[today]) {
+    const cutoff = utcDay(new Date(now.getTime() - KEEP_DAYS * 86_400_000));
+    for (const day of Object.keys(a.days)) if (day < cutoff) delete a.days[day];
+  }
+  const day = (a.days[today] ??= { ...emptyCounts(), providers: {} });
+  const byModel = (day.providers[provider] ??= {});
+  addCounts((byModel[model] ??= emptyCounts()), used);
+  addCounts(day, used);
+  addCounts(a.total, used);
+  a.lastUsedAt = now.toISOString();
+}
+
 // One request made with key `id`. `tokens`: what the provider reported, or
 // null when it didn't say, and they're estimated from `textChars` (the
-// prompt and answer) instead.
+// prompt and answer) instead. An account's key counts for the account too.
 export function recordKeyUsage(
   id: string,
   provider: string,
@@ -394,20 +475,10 @@ export function recordKeyUsage(
     tokens: (outcome.tokens ?? 0) + estimated,
     estimatedTokens: estimated,
   };
-
   const now = new Date();
-  const today = utcDay(now);
-  if (!key.days[today]) {
-    const cutoff = utcDay(new Date(now.getTime() - KEEP_DAYS * 86_400_000));
-    for (const day of Object.keys(key.days)) if (day < cutoff) delete key.days[day];
-  }
-  const day = (key.days[today] ??= { ...emptyCounts(), providers: {} });
-  const byModel = (day.providers[provider] ??= {});
-  addCounts((byModel[model] ??= emptyCounts()), used);
-  addCounts(day, used);
-  addCounts(key.total, used);
-  key.lastUsedAt = now.toISOString();
-
+  addUsage(key, provider, model, used, now);
+  const account = key.userId ? accountIn(s, key.userId) : null;
+  if (account) addUsage(account, provider, model, used, now);
   s.changes += 1;
   scheduleSave(s);
 }
@@ -416,12 +487,7 @@ export function recordKeyUsage(
 // Reading
 // ---------------------------------------------------------------------------
 
-export type KeySummary = {
-  id: string;
-  name: string;
-  note: string;
-  hint: string;
-  createdAt: string;
+export type AllowanceSummary = {
   status: KeyStatus;
   disabled: boolean;
   expiresAt: string | null;
@@ -429,35 +495,70 @@ export type KeySummary = {
   providers: string[] | null;
   agentTools: boolean;
   lastUsedAt: string | null;
-  // The current period: today, this month (UTC), or the key's whole life.
+  // The current period: today, this month (UTC), or all time.
   used: Counts;
   remaining: { tokens: number | null; requests: number | null }; // null: no limit
   resetsAt: string | null;
   total: Counts;
 };
 
-export function summarize(key: ApiToken, now = new Date()): KeySummary {
-  const used = usedInPeriod(key, now);
-  const { tokens, requests } = key.limits;
+function summarizeAllowance(a: Allowance, now: Date): AllowanceSummary {
+  const used = usedInPeriod(a, now);
+  const { tokens, requests } = a.limits;
   return {
-    id: key.id,
-    name: key.name,
-    note: key.note,
-    hint: key.hint,
-    createdAt: key.createdAt,
-    status: statusOf(key, now.getTime()),
-    disabled: key.disabled,
-    expiresAt: key.expiresAt,
-    limits: { ...key.limits },
-    providers: key.providers ? [...key.providers] : null,
-    agentTools: key.agentTools,
-    lastUsedAt: key.lastUsedAt,
+    status: statusOf(a, now.getTime()),
+    disabled: a.disabled,
+    expiresAt: a.expiresAt,
+    limits: { ...a.limits },
+    providers: a.providers ? [...a.providers] : null,
+    agentTools: a.agentTools,
+    lastUsedAt: a.lastUsedAt,
     used,
     remaining: {
       tokens: tokens === null ? null : Math.max(0, tokens - used.tokens),
       requests: requests === null ? null : Math.max(0, requests - counted(used)),
     },
-    resetsAt: resetsAt(key.limits.period, now),
+    resetsAt: resetsAt(a.limits.period, now),
+    total: { ...a.total },
+  };
+}
+
+export type KeySummary = AllowanceSummary & {
+  id: string;
+  name: string;
+  note: string;
+  hint: string;
+  createdAt: string;
+  userId: string | null;
+};
+
+// A key with the allowance that applies to it (for an account's key, the
+// account's, but the key's own on/off switch and last use).
+export function summarize(key: ApiToken, now = new Date()): KeySummary {
+  const account = key.userId ? accountIn(store(), key.userId) : null;
+  const allowance = summarizeAllowance(account ?? key, now);
+  return {
+    ...allowance,
+    ...(key.disabled ? { status: "disabled" as const, disabled: true } : {}),
+    lastUsedAt: key.lastUsedAt,
+    id: key.id,
+    name: key.name,
+    note: key.note,
+    hint: key.hint,
+    createdAt: key.createdAt,
+    userId: key.userId,
+  };
+}
+
+// An account's key, as its holder sees it in their dashboard: its own use.
+export function ownKeySummary(key: ApiToken) {
+  return {
+    id: key.id,
+    name: key.name,
+    hint: key.hint,
+    createdAt: key.createdAt,
+    disabled: key.disabled,
+    lastUsedAt: key.lastUsedAt,
     total: { ...key.total },
   };
 }
@@ -465,11 +566,34 @@ export function summarize(key: ApiToken, now = new Date()): KeySummary {
 // What the key's holder sees (GET /api/me): no id, and not the owner's note.
 export function holderView(key: ApiToken, now = new Date()) {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { id: _id, note: _note, ...rest } = summarize(key, now);
-  return rest;
+  const { id: _id, note: _note, userId, ...rest } = summarize(key, now);
+  return { ...rest, account: userId !== null };
 }
 
-export type KeyMonth = {
+export type AccountSummary = AllowanceSummary & {
+  userId: string;
+  email: string;
+  note: string;
+  createdAt: string;
+  activatedAt: string | null;
+  maxKeys: number;
+  keyCount: number;
+};
+
+export function summarizeAccount(account: Account, now = new Date()): AccountSummary {
+  return {
+    ...summarizeAllowance(account, now),
+    userId: account.userId,
+    email: account.email,
+    note: account.note,
+    createdAt: account.createdAt,
+    activatedAt: account.activatedAt,
+    maxKeys: account.maxKeys,
+    keyCount: store().file.tokens.filter((t) => t.userId === account.userId).length,
+  };
+}
+
+export type MonthUsage = {
   month: string;
   totals: Counts;
   days: { day: string; requests: number; tokens: number }[]; // every day of the month
@@ -477,14 +601,14 @@ export type KeyMonth = {
 };
 
 // `month` is "2026-10" (UTC).
-export function keyMonth(key: ApiToken, month: string): KeyMonth {
+export function monthUsage(a: Allowance, month: string): MonthUsage {
   const [year, mon] = month.split("-").map(Number);
   const length = new Date(Date.UTC(year, mon, 0)).getUTCDate();
   const totals = emptyCounts();
   const models = new Map<string, Counts & { provider: string; model: string }>();
   const days = Array.from({ length }, (_, i) => {
     const day = `${month}-${String(i + 1).padStart(2, "0")}`;
-    const usage = key.days[day];
+    const usage = a.days[day];
     if (!usage) return { day, requests: 0, tokens: 0 };
     addCounts(totals, usage);
     for (const [provider, byModel] of Object.entries(usage.providers)) {
@@ -505,6 +629,12 @@ export function keyMonth(key: ApiToken, month: string): KeyMonth {
   };
 }
 
+// The months there's usage in, and the current one, newest first.
+export function usageMonths(a: Allowance, now = new Date()): string[] {
+  const months = new Set([utcDay(now).slice(0, 7), ...Object.keys(a.days).map((day) => day.slice(0, 7))]);
+  return [...months].sort().reverse();
+}
+
 export async function listKeys(): Promise<ApiToken[]> {
   return (await ready()).file.tokens;
 }
@@ -513,8 +643,16 @@ export async function getKey(id: string): Promise<ApiToken | null> {
   return (await ready()).file.tokens.find((t) => t.id === id) ?? null;
 }
 
+export async function listAccounts(): Promise<Account[]> {
+  return (await ready()).file.accounts;
+}
+
+export async function getAccount(userId: string): Promise<Account | null> {
+  return accountIn(await ready(), userId);
+}
+
 // ---------------------------------------------------------------------------
-// The owner's changes
+// Changes
 // ---------------------------------------------------------------------------
 
 export type KeySettings = {
@@ -532,9 +670,11 @@ export type KeyChanges = KeySettings & {
   addRequests?: number;
   extendDays?: number; // push the expiry this many days later (from now, if it's past)
   rotate?: boolean; // a new key; the old one stops working
+  activate?: boolean; // accounts: let its keys work (or, false, not yet)
+  maxKeys?: number; // accounts: how many keys its holder may have
 };
 
-// A change the owner asked for that can't be made, with why (an HTTP 400).
+// A change that can't be made, with why (an HTTP 400).
 export class KeyChangeError extends Error {}
 
 const MAX_AMOUNT = 1e15;
@@ -573,7 +713,7 @@ export function parseChanges(body: unknown, knownProviders: readonly string[]): 
     if (typeof b.note !== "string") throw new KeyChangeError("`note` must be a string");
     changes.note = b.note.trim().slice(0, 1000);
   }
-  for (const field of ["disabled", "agentTools", "rotate"] as const) {
+  for (const field of ["disabled", "agentTools", "rotate", "activate"] as const) {
     const value = b[field];
     if (value === undefined) continue;
     if (typeof value !== "boolean") throw new KeyChangeError(`\`${field}\` must be true or false`);
@@ -601,36 +741,41 @@ export function parseChanges(body: unknown, knownProviders: readonly string[]): 
       changes.providers = [...new Set(b.providers as string[])];
     } else throw new KeyChangeError("`providers` must be a list of provider ids, or null for all of them");
   }
-  for (const field of ["addTokens", "addRequests", "extendDays"] as const) {
+  for (const field of ["addTokens", "addRequests", "extendDays", "maxKeys"] as const) {
     if (b[field] !== undefined) changes[field] = amount(b[field], field, false) ?? 0;
   }
   return changes;
 }
 
-function apply(key: ApiToken, changes: KeyChanges, now = Date.now()): void {
-  if (changes.name !== undefined) key.name = changes.name;
-  if (changes.note !== undefined) key.note = changes.note;
-  if (changes.disabled !== undefined) key.disabled = changes.disabled;
-  if (changes.expiresAt !== undefined) key.expiresAt = changes.expiresAt;
-  if (changes.limits) key.limits = { ...key.limits, ...changes.limits };
-  if (changes.providers !== undefined) key.providers = changes.providers;
-  if (changes.agentTools !== undefined) key.agentTools = changes.agentTools;
+function apply(a: Allowance & { note: string; name?: string }, changes: KeyChanges, now = Date.now()): void {
+  if (changes.name !== undefined && "name" in a) a.name = changes.name;
+  if (changes.note !== undefined) a.note = changes.note;
+  if (changes.disabled !== undefined) a.disabled = changes.disabled;
+  if (changes.expiresAt !== undefined) a.expiresAt = changes.expiresAt;
+  if (changes.limits) a.limits = { ...a.limits, ...changes.limits };
+  if (changes.providers !== undefined) a.providers = changes.providers;
+  if (changes.agentTools !== undefined) a.agentTools = changes.agentTools;
   if (changes.addTokens) {
-    if (key.limits.tokens === null) throw new KeyChangeError("This key has no token limit to add to");
-    key.limits.tokens += changes.addTokens;
+    if (a.limits.tokens === null) throw new KeyChangeError("There's no token limit to add to");
+    a.limits.tokens += changes.addTokens;
   }
   if (changes.addRequests) {
-    if (key.limits.requests === null) throw new KeyChangeError("This key has no request limit to add to");
-    key.limits.requests += changes.addRequests;
+    if (a.limits.requests === null) throw new KeyChangeError("There's no request limit to add to");
+    a.limits.requests += changes.addRequests;
   }
   if (changes.extendDays) {
-    if (!key.expiresAt) throw new KeyChangeError("This key never expires, so there's nothing to extend");
-    const from = Math.max(Date.parse(key.expiresAt), now);
-    key.expiresAt = new Date(from + changes.extendDays * 86_400_000).toISOString();
+    if (!a.expiresAt) throw new KeyChangeError("It never expires, so there's nothing to extend");
+    const from = Math.max(Date.parse(a.expiresAt), now);
+    a.expiresAt = new Date(from + changes.extendDays * 86_400_000).toISOString();
   }
 }
 
-export async function createKey(settings: KeyChanges): Promise<{ key: ApiToken; secret: string }> {
+// A key the owner makes (with its own allowance), or, with `userId`, one an
+// account's holder makes (with the account's).
+export async function createKey(
+  settings: KeyChanges,
+  userId: string | null = null
+): Promise<{ key: ApiToken; secret: string }> {
   const s = await ready();
   const secret = newSecret();
   const key = normalize({
@@ -638,6 +783,7 @@ export async function createKey(settings: KeyChanges): Promise<{ key: ApiToken; 
     hash: hashOf(secret),
     hint: hintOf(secret),
     createdAt: new Date().toISOString(),
+    userId,
   });
   apply(key, { ...settings, addTokens: undefined, addRequests: undefined, extendDays: undefined });
   s.file.tokens.push(key);
@@ -671,4 +817,38 @@ export async function deleteKey(id: string): Promise<boolean> {
   s.recent.delete(id);
   await saveNow(s);
   return true;
+}
+
+// The account of a signed-in user, made (waiting to be activated) the first
+// time they sign in, with the email address kept up to date.
+export async function ensureAccount(user: { id: string; email: string }): Promise<Account> {
+  const s = await ready();
+  let account = accountIn(s, user.id);
+  if (!account) {
+    account = normalizeAccount({ userId: user.id, email: user.email, createdAt: new Date().toISOString() });
+    s.file.accounts.push(account);
+    await saveNow(s);
+  } else if (account.email !== user.email) {
+    account.email = user.email;
+    await saveNow(s);
+  }
+  return account;
+}
+
+// The owner's changes to an account. Made first if the user hasn't signed in
+// to their dashboard yet.
+export async function updateAccount(user: { id: string; email: string }, changes: KeyChanges): Promise<Account> {
+  const s = await ready();
+  const account = await ensureAccount(user);
+  const draft = structuredClone(account);
+  apply(draft, { ...changes, name: undefined, rotate: undefined });
+  if (changes.activate !== undefined) draft.activatedAt = changes.activate ? (draft.activatedAt ?? new Date().toISOString()) : null;
+  if (changes.maxKeys !== undefined) draft.maxKeys = changes.maxKeys;
+  Object.assign(account, draft);
+  await saveNow(s);
+  return account;
+}
+
+export async function accountKeys(userId: string): Promise<ApiToken[]> {
+  return (await ready()).file.tokens.filter((t) => t.userId === userId);
 }

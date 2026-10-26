@@ -10,11 +10,21 @@ import {
   type ReactNode,
 } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { supabaseBrowser } from "@/lib/supabase-browser";
 import { ApiKeys, type KeySummary } from "./api-keys";
 import { Logo } from "./logo";
 import styles from "./page.module.css";
+import {
+  CLOUD_PROVIDERS,
+  LOCAL_PROVIDERS,
+  PROVIDER_LABELS,
+  PROVIDER_OPTIONS,
+  type ChatProvider,
+} from "./providers";
 import { getThemePref, setThemePref, subscribeTheme, type ThemePref } from "./theme";
 import { CopyButton, dayLabel, formatCount, monthLabel, ProgressBar } from "./ui";
+import { Users } from "./users";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -113,32 +123,11 @@ type ProviderPlanLimits = {
   error: string | null;
 };
 
-const CLOUD_PROVIDERS = ["sea-lion", "cerebras", "groq"] as const;
-// chatgpt, grok and mimo aren't CLIs: chatgpt-web-gateway answers through their
-// websites in a signed-in Chrome window. It speaks local-agent-gateway's API, so
-// they're listed and called like the CLIs.
-const LOCAL_PROVIDERS = ["claude", "codex", "gemini", "antigravity", "chatgpt", "grok", "mimo"] as const;
 const WEB_PROVIDERS: readonly string[] = ["chatgpt", "grok", "mimo"];
 const WEB_HOSTS: Record<string, string> = {
   chatgpt: "chatgpt.com",
   grok: "grok.com",
   mimo: "Xiaomi MiMo Studio",
-};
-type ChatProvider =
-  | (typeof CLOUD_PROVIDERS)[number]
-  | (typeof LOCAL_PROVIDERS)[number];
-
-const PROVIDER_LABELS: Record<ChatProvider, string> = {
-  "sea-lion": "SEA-LION",
-  cerebras: "Cerebras",
-  groq: "Groq",
-  claude: "Claude Code",
-  codex: "Codex",
-  gemini: "Gemini CLI",
-  antigravity: "Antigravity",
-  chatgpt: "ChatGPT (web)",
-  grok: "Grok (web)",
-  mimo: "MiMo (web)",
 };
 
 function isCloudProvider(p: ChatProvider): boolean {
@@ -187,7 +176,7 @@ type ChatMessage = {
   isError?: boolean;
 };
 
-type View = "dashboard" | "playground" | "api-keys" | "analytics" | "manage";
+type View = "dashboard" | "playground" | "api-keys" | "users" | "analytics" | "manage";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -221,6 +210,13 @@ const NAV_ITEMS: {
     icon: "key",
     description:
       "Keys for other people and apps, each with its own limits, expiry and usage. Only you can manage them.",
+  },
+  {
+    id: "users",
+    label: "Users",
+    icon: "users",
+    description:
+      "People with accounts: activate them with a plan, top them up, and see what each one uses.",
   },
   {
     id: "analytics",
@@ -260,6 +256,7 @@ type IconName =
   | "dashboard"
   | "playground"
   | "key"
+  | "users"
   | "analytics"
   | "manage"
   | "logout"
@@ -296,6 +293,14 @@ const ICON_PATHS: Record<IconName, ReactNode> = {
       <circle cx="7.5" cy="15.5" r="5.5" />
       <path d="m21 2-9.6 9.6" />
       <path d="m15.5 7.5 3 3L22 7l-3-3" />
+    </>
+  ),
+  users: (
+    <>
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
     </>
   ),
   analytics: (
@@ -621,11 +626,47 @@ async function checkSession() {
   try {
     const res = await fetch("/api/session", { cache: "no-store" });
     const data = (await res.json()) as { signedIn?: boolean };
-    setSignedIn(!!data.signedIn);
+    setSignedIn(!!data.signedIn || (await adminFromAccount()));
   } catch {
     setSignedIn(false);
   }
 }
+
+// An admin already signed in with their account in this browser (on
+// /account, say) gets the console without signing in again.
+async function adminFromAccount(): Promise<boolean> {
+  const session = (await supabaseBrowser()?.auth.getSession())?.data.session;
+  if (!session) return false;
+  return (await consoleSignIn({ accessToken: session.access_token })).ok;
+}
+
+// The sign-in cookie, for the owner key or an admin's account.
+async function consoleSignIn(
+  body: { key: string } | { accessToken: string },
+): Promise<{ ok: boolean; error?: string; account?: boolean }> {
+  const res = await fetch("/api/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = (await res.json().catch(() => null)) as {
+    error?: string;
+    account?: boolean;
+  } | null;
+  return res.ok
+    ? { ok: true }
+    : {
+        ok: false,
+        error: data?.error || `Sign-in failed (HTTP ${res.status})`,
+        account: data?.account,
+      };
+}
+
+// Accounts are on when the build has Supabase's address and public key.
+const ACCOUNTS_ON = Boolean(
+  process.env.NEXT_PUBLIC_SUPABASE_URL &&
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+);
 
 // ---------------------------------------------------------------------------
 // Page
@@ -646,7 +687,11 @@ export default function Dashboard() {
   useEffect(() => {
     void checkSession();
   }, []);
+  const router = useRouter();
   const [inputValue, setInputValue] = useState("");
+  const [signInEmail, setSignInEmail] = useState("");
+  const [signInPassword, setSignInPassword] = useState("");
+  const [useOwnerKey, setUseOwnerKey] = useState(!ACCOUNTS_ON);
   const [signingIn, setSigningIn] = useState(false);
   const [keys, setKeys] = useState<KeyUsage[] | null>(null);
   const [localUsage, setLocalUsage] = useState<LocalUsage[] | null>(null);
@@ -1012,6 +1057,7 @@ export default function Dashboard() {
   function signOut() {
     abortRef.current?.abort();
     void fetch("/api/session", { method: "DELETE" }).catch(() => {});
+    void supabaseBrowser()?.auth.signOut();
     setSignedIn(false);
     setKeys(null);
     setLocalUsage(null);
@@ -1036,17 +1082,53 @@ export default function Dashboard() {
     setError(null);
     setSigningIn(true);
     try {
-      const res = await fetch("/api/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: inputValue }),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        setError(data?.error || `Sign-in failed (HTTP ${res.status})`);
+      const result = await consoleSignIn({ key: inputValue });
+      if (!result.ok) {
+        setError(result.error ?? "Sign-in failed");
         return;
       }
       setInputValue("");
+      setSignedIn(true);
+    } catch {
+      setError("Network error reaching the gateway");
+    } finally {
+      setSigningIn(false);
+    }
+  }
+
+  // An admin's account: Supabase signs them in, and its session is traded
+  // for the console's cookie. Anyone else goes to their own dashboard.
+  async function signInWithAccount(e: FormEvent) {
+    e.preventDefault();
+    const sb = supabaseBrowser();
+    if (!sb) return;
+    setError(null);
+    setSigningIn(true);
+    try {
+      const { data, error } = await sb.auth.signInWithPassword({
+        email: signInEmail,
+        password: signInPassword,
+      });
+      if (error || !data.session) {
+        setError(
+          error && /not confirmed/i.test(error.message)
+            ? "Confirm your email address first: open the link Supabase sent you."
+            : (error?.message ?? "Sign-in failed"),
+        );
+        return;
+      }
+      const result = await consoleSignIn({
+        accessToken: data.session.access_token,
+      });
+      if (result.account) {
+        router.push("/account");
+        return;
+      }
+      if (!result.ok) {
+        setError(result.error ?? "Sign-in failed");
+        return;
+      }
+      setSignInPassword("");
       setSignedIn(true);
     } catch {
       setError("Network error reaching the gateway");
@@ -1073,8 +1155,59 @@ export default function Dashboard() {
             </span>
           </div>
           <p className={styles.subtitle}>
-            Sign in with your APP_API_KEY to manage providers, keys and usage.
+            Sign in to manage providers, keys, users and usage.
           </p>
+          {ACCOUNTS_ON && (
+            <form onSubmit={signInWithAccount} className={styles.authForm}>
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="signin-email">
+                  Email
+                </label>
+                <input
+                  id="signin-email"
+                  type="email"
+                  autoComplete="email"
+                  value={signInEmail}
+                  onChange={(e) => setSignInEmail(e.target.value)}
+                  className={styles.input}
+                  required
+                />
+              </div>
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="signin-password">
+                  Password
+                </label>
+                <input
+                  id="signin-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={signInPassword}
+                  onChange={(e) => setSignInPassword(e.target.value)}
+                  className={styles.input}
+                  required
+                />
+              </div>
+              <button
+                type="submit"
+                className={`${styles.button} ${styles.buttonFull}`}
+                disabled={signingIn}
+              >
+                {signingIn && !useOwnerKey ? "Signing in…" : "Sign in"}
+              </button>
+            </form>
+          )}
+          {ACCOUNTS_ON && (
+            <div className={styles.authDivider}>
+              <button
+                type="button"
+                className={styles.linkButton}
+                onClick={() => setUseOwnerKey(!useOwnerKey)}
+              >
+                {useOwnerKey ? "Hide the owner key" : "Or use the owner key"}
+              </button>
+            </div>
+          )}
+          {useOwnerKey && (
           <form onSubmit={signIn}>
             <div className={styles.field}>
               <label className={styles.label} htmlFor="appkey">
@@ -1099,9 +1232,17 @@ export default function Dashboard() {
               {signingIn ? "Signing in…" : "Sign in"}
             </button>
           </form>
+          )}
           {error && (
             <div className={styles.alert} style={{ marginTop: 14 }}>
               {error}
+            </div>
+          )}
+          {ACCOUNTS_ON && (
+            <div className={styles.authLinks}>
+              <Link href="/account" className={styles.inlineLink}>
+                Not an admin? Your account →
+              </Link>
             </div>
           )}
         </div>
@@ -2086,10 +2227,7 @@ export default function Dashboard() {
     <ApiKeys
       keys={tokens}
       publicOrigin={publicOrigin}
-      providers={[...CLOUD_PROVIDERS, ...LOCAL_PROVIDERS].map((p) => ({
-        id: p,
-        label: PROVIDER_LABELS[p],
-      }))}
+      providers={PROVIDER_OPTIONS}
       reload={loadTokens}
       now={tokensAt}
     />
@@ -2792,6 +2930,7 @@ export default function Dashboard() {
         {view === "dashboard" && dashboardView}
         {view === "playground" && playgroundView}
         {view === "api-keys" && apiKeysView}
+        {view === "users" && <Users providers={PROVIDER_OPTIONS} />}
         {view === "analytics" && analyticsView}
         {view === "manage" && manageView}
       </main>

@@ -1185,6 +1185,65 @@
   color: var(--warning-text);
 }
 
+/* ---------- Accounts (/account, and signing in with one) ---------- */
+
+.authForm {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.authLinks {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.authDivider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 14px;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+
+.authDivider::before,
+.authDivider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+
+/* width: 100%, or the body's flex column shrinks it to fit its widest table. */
+.accountShell {
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 24px 20px 3rem;
+}
+
+.accountHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.accountHeader a {
+  text-decoration: none;
+}
+
+.planFigure {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 /* ---------- Progress bars ---------- */
 
 .progressLabel {

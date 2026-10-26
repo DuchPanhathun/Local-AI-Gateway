@@ -74,3 +74,180 @@ export function dayLabel(day: string): string {
     timeZone: "UTC",
   });
 }
+
+export type UsageCounts = {
+  requests: number;
+  errors: number;
+  tokens: number;
+  estimatedTokens: number;
+};
+
+// A key's or an account's use in one month, as /api/tokens, /api/users and
+// /api/account send it.
+export type MonthUsage = {
+  month: string;
+  totals: UsageCounts;
+  days: { day: string; requests: number; tokens: number }[];
+  models: (UsageCounts & { provider: string; model: string })[];
+};
+
+// That month's totals, tokens per day and models, with a month picker.
+export function UsagePanel({
+  usage,
+  month,
+  months,
+  onMonth,
+  labels,
+  today,
+}: {
+  usage: MonthUsage | null; // null while it loads
+  month: string;
+  months: string[];
+  onMonth: (month: string) => void;
+  labels: Map<string, string>; // provider id → name
+  today: string; // "2026-10-26", UTC
+}) {
+  const peakDay = usage?.days.reduce<{ day: string; tokens: number } | null>(
+    (peak, d) => (d.tokens > (peak?.tokens ?? 0) ? d : peak),
+    null,
+  );
+  const monthOptions = months.includes(month) ? months : [month, ...months];
+  return (
+    <>
+    <div className={styles.sectionHeader}>
+      <span className={styles.sectionTitle}>Usage</span>
+      <select
+        className={`${styles.select} ${styles.selectCompact}`}
+        value={month}
+        onChange={(e) => onMonth(e.target.value)}
+        aria-label="Month"
+      >
+        {monthOptions.map((m) => (
+          <option key={m} value={m}>
+            {monthLabel(m)}
+          </option>
+        ))}
+      </select>
+    </div>
+    {!usage ? (
+      <p className={styles.empty}>Loading…</p>
+    ) : (
+      <>
+        <div className={styles.usageSummary}>
+          {(
+            [
+              ["Tokens", usage.totals.tokens],
+              ["Estimated tokens", usage.totals.estimatedTokens],
+              ["Requests", usage.totals.requests - usage.totals.errors],
+              ["Failed", usage.totals.errors],
+            ] as const
+          ).map(([label, value]) => (
+            <div key={label} className={styles.usageFigure}>
+              <span
+                className={styles.usageFigureValue}
+                title={value.toLocaleString()}
+              >
+                {formatCount(value)}
+              </span>
+              <span className={styles.usageFigureLabel}>{label}</span>
+            </div>
+          ))}
+        </div>
+
+        <div className={styles.chartHead}>
+          <span>Tokens per day (UTC)</span>
+          <span>
+            {peakDay
+              ? `Peak ${formatCount(peakDay.tokens)} on ${dayLabel(peakDay.day)}`
+              : ""}
+          </span>
+        </div>
+        <div className={styles.chart}>
+          {usage.days.map((d) => {
+            const future = d.day > today;
+            const height = peakDay
+              ? Math.max((d.tokens / peakDay.tokens) * 100, 2)
+              : 0;
+            return (
+              <div
+                key={d.day}
+                className={styles.chartCol}
+                title={
+                  future
+                    ? dayLabel(d.day)
+                    : `${dayLabel(d.day)}: ${d.tokens.toLocaleString()} tokens · ${d.requests.toLocaleString()} request${d.requests === 1 ? "" : "s"}`
+                }
+              >
+                <div
+                  className={`${styles.chartBar} ${
+                    future
+                      ? styles.chartBarFuture
+                      : d.tokens
+                        ? ""
+                        : styles.chartBarEmpty
+                  } ${d.day === today ? styles.chartBarToday : ""}`}
+                  style={d.tokens ? { height: `${height}%` } : undefined}
+                />
+              </div>
+            );
+          })}
+        </div>
+        <div className={styles.chartAxis}>
+          {usage.days.map((d, i) => (
+            <span key={d.day}>
+              {i % 7 === 0 ? Number(d.day.slice(8)) : ""}
+            </span>
+          ))}
+        </div>
+
+        {usage.models.length > 0 ? (
+          <div className={styles.tableWrap}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th>Provider</th>
+                  <th>Requests</th>
+                  <th>Failed</th>
+                  <th>Tokens</th>
+                </tr>
+              </thead>
+              <tbody>
+                {usage.models.map((m) => (
+                  <tr key={`${m.provider}:${m.model}`}>
+                    <td
+                      className={
+                        m.model === "default" ? styles.dim : styles.mono
+                      }
+                    >
+                      {m.model === "default" ? "CLI default" : m.model}
+                    </td>
+                    <td className={styles.dim}>
+                      {labels.get(m.provider) ?? m.provider}
+                    </td>
+                    <td>{(m.requests - m.errors).toLocaleString()}</td>
+                    <td>{m.errors.toLocaleString()}</td>
+                    <td>
+                      {m.tokens.toLocaleString()}
+                      {m.estimatedTokens > 0 && (
+                        <span className={styles.dim}>
+                          {" "}
+                          (≈{formatCount(m.estimatedTokens)} estimated)
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className={styles.empty}>
+            No requests in {monthLabel(usage.month)}.
+          </p>
+        )}
+      </>
+    )}
+    </>
+  );
+}

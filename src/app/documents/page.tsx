@@ -35,6 +35,7 @@ const NAV: NavGroup[] = [
       { id: "quotas", label: "Quotas" },
       { id: "providers", label: "Pause & resume" },
       { id: "tokens", label: "Access tokens" },
+      { id: "users", label: "Users" },
       { id: "health", label: "CLI health" },
       { id: "limits", label: "CLI plan limits" },
     ],
@@ -699,10 +700,11 @@ export default function DocumentsPage() {
               </li>
               <li>
                 <strong>Access tokens</strong> (<code>sk-ai-thun-…</code>): created on the
-                console’s <Link href="/">API keys</Link> page, one per app or person. They can
-                only send requests to providers and read their own balance at{" "}
-                <a href="#me">/api/me</a>. Each one can have its own limits, expiry date and
-                providers, and you can turn it off or delete it on its own.
+                console’s <Link href="/">API keys</Link> page, one per app or person, or by
+                people with an account on their own <Link href="/account">account page</Link>.
+                They can only send requests to providers and read their own balance at{" "}
+                <a href="#me">/api/me</a>. Each one has limits, an expiry date and providers:
+                its own, or for an account’s keys, the account’s plan, which they all share.
               </li>
             </ul>
             <Table
@@ -714,6 +716,7 @@ export default function DocumentsPage() {
                 [<code key="e">GET /api/usage, /api/quotas</code>, <Yes key="o" />, <No key="t" />],
                 [<code key="e">GET, PATCH /api/providers</code>, <Yes key="o" />, <No key="t" />],
                 [<code key="e">GET, POST, PATCH, DELETE /api/tokens</code>, <Yes key="o" />, <No key="t" />],
+                [<code key="e">GET, PATCH /api/users</code>, <Yes key="o" />, <No key="t" />],
                 [<code key="e">GET /api/local-agent/health, /api/local-agent/limits</code>, <Yes key="o" />, <No key="t" />],
               ]}
             />
@@ -1054,6 +1057,26 @@ export default function DocumentsPage() {
               ]}
             />
             <CodeBlock code={TOKENS_CURL} label="Requests" />
+          </Section>
+
+          <Section id="users" title="Users">
+            <Endpoint method="GET" path="/api/users" owner />
+            <Endpoint method="PATCH" path="/api/users?id=…" owner />
+            <p>
+              The people who signed up at <Link href="/account">/account</Link> (with Supabase),
+              each with their account: its plan, how many keys it has, and what it has used. A new
+              account is <code>pending</code> and its keys don’t work until you activate it.{" "}
+              <code>GET /api/users?id=…&amp;month=2026-10</code> adds the user’s keys and that
+              month’s use by day and model. The console’s Users page does the same.
+            </p>
+            <Fields
+              rows={[
+                ["activate", "boolean", <><code>true</code>: the account’s keys can work. Send it with the plan.</>],
+                ["limits, expiresAt, providers, agentTools, disabled, note", "", <>The account’s plan, which all its keys share: the same fields as an access token’s (see <a href="#tokens">Access tokens</a>), and <code>addTokens</code>, <code>addRequests</code>, <code>extendDays</code>.</>],
+                ["maxKeys", "number", "How many keys the user may make. Default 5."],
+                ["confirmEmail", "boolean", <><code>true</code>: confirm their email address, when Supabase’s email didn’t reach them.</>],
+              ]}
+            />
           </Section>
 
           <Section id="health" title="CLI health">

@@ -5,15 +5,16 @@ import {
   deleteKey,
   getKey,
   KeyChangeError,
-  keyMonth,
   listKeys,
+  monthUsage,
   parseChanges,
   summarize,
   updateKey,
+  usageMonths,
 } from "@/lib/api-tokens";
 import { LOCAL_AGENT_PROVIDER_IDS } from "@/lib/local-agent";
 import { todayUTC } from "@/lib/usage-ledger";
-import { checkAccess, refusal } from "@/lib/auth";
+import { checkAccess, publicOrigin, refusal } from "@/lib/auth";
 
 // Owner-only: making, changing and deleting access tokens, and reading their
 // usage, needs APP_API_KEY or the console's sign-in. A token can never manage
@@ -54,8 +55,9 @@ export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }
 
-// GET /api/tokens → every key with its status and the current period's usage,
-// plus `publicOrigin`, the address to give key holders.
+// GET /api/tokens → every key you made, with its status and the current
+// period's usage, plus `publicOrigin`, the address to give key holders.
+// (Accounts' keys are on /api/users.)
 // GET /api/tokens?id=…&month=2026-10 → one key, with its usage that month
 // (default: this one) by day and model, and the months it has usage in.
 export async function GET(req: NextRequest) {
@@ -64,18 +66,16 @@ export async function GET(req: NextRequest) {
 
   const id = req.nextUrl.searchParams.get("id");
   if (!id) {
-    const tokens = (await listKeys()).map((key) => summarize(key));
-    const publicOrigin = (process.env.PUBLIC_ORIGINS ?? "").split(",").map((o) => o.trim()).find(Boolean) ?? null;
-    return NextResponse.json({ tokens, publicOrigin }, { headers: CORS_HEADERS });
+    const tokens = (await listKeys()).filter((key) => !key.userId).map((key) => summarize(key));
+    return NextResponse.json({ tokens, publicOrigin: publicOrigin() }, { headers: CORS_HEADERS });
   }
 
   const key = await getKey(id);
   if (!key) return fail(404, `No token with id "${id}"`);
   const month = req.nextUrl.searchParams.get("month") ?? todayUTC().slice(0, 7);
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return fail(400, "`month` must be a year and month, like 2026-10");
-  const months = new Set([todayUTC().slice(0, 7), ...Object.keys(key.days).map((day) => day.slice(0, 7))]);
   return NextResponse.json(
-    { token: summarize(key), usage: keyMonth(key, month), months: [...months].sort().reverse() },
+    { token: summarize(key), usage: monthUsage(key, month), months: usageMonths(key) },
     { headers: CORS_HEADERS }
   );
 }
