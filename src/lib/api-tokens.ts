@@ -1,3 +1,4 @@
+import { calculateUsageCost, type UsageCost } from "./pricing";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, renameSync } from "node:fs";
 import type { RedeemCode } from "./redeem-codes";
@@ -75,6 +76,19 @@ export type ApiToken = Allowance & {
   userId: string | null;
 };
 
+export type CreditTransaction = {
+  id: string;
+  userId: string;
+  type: "deposit" | "usage" | "refund" | "adjustment";
+  amountCents: number; // positive for deposits, negative for deductions
+  amountUSD: number;
+  balanceAfterCents: number;
+  balanceAfterUSD: number;
+  description: string;
+  orderId?: string | null;
+  createdAt: string;
+};
+
 export type Account = Allowance & {
   userId: string; // the Supabase user
   email: string; // as of the last time they signed in
@@ -82,6 +96,10 @@ export type Account = Allowance & {
   createdAt: string;
   activatedAt: string | null; // null: waiting for the owner, and its keys don't work
   maxKeys: number;
+  balance: number; // in USD (credits)
+  creditBalance: number; // alias for balance
+  creditBalanceCents: number; // balance in cents (e.g. 500 for $5.00)
+  transactions?: CreditTransaction[];
 };
 
 export type TokenFile = {
@@ -159,6 +177,18 @@ function normalize(t: Partial<ApiToken>): ApiToken {
 }
 
 function normalizeAccount(a: Partial<Account>): Account {
+  const credit =
+    typeof a.creditBalance === "number"
+      ? a.creditBalance
+      : typeof a.balance === "number"
+        ? a.balance
+        : typeof (a as { creditBalanceCents?: number }).creditBalanceCents === "number"
+          ? (a as { creditBalanceCents: number }).creditBalanceCents / 100
+          : 0;
+  const cents =
+    typeof (a as { creditBalanceCents?: number }).creditBalanceCents === "number"
+      ? (a as { creditBalanceCents: number }).creditBalanceCents
+      : Math.round(credit * 100);
   return {
     ...normalizeAllowance(a),
     userId: String(a.userId),
@@ -167,6 +197,10 @@ function normalizeAccount(a: Partial<Account>): Account {
     createdAt: a.createdAt ?? new Date(0).toISOString(),
     activatedAt: a.activatedAt ?? null,
     maxKeys: typeof a.maxKeys === "number" ? a.maxKeys : DEFAULT_MAX_KEYS,
+    balance: credit,
+    creditBalance: credit,
+    creditBalanceCents: cents,
+    transactions: Array.isArray(a.transactions) ? a.transactions : [],
   };
 }
 
@@ -415,14 +449,19 @@ export function admit(key: ApiToken, now = Date.now()): KeyBlock | null {
   if (key.disabled) return { status: 403, error: "This API key is turned off." };
   const s = store();
   let allowance: Allowance = key;
+  let hasCredit = false;
   if (key.userId) {
     const account = accountIn(s, key.userId);
     if (!account) return { status: 403, error: "This API key's account no longer exists." };
-    if (!account.activatedAt) return { status: 403, error: "This API key's account hasn't been activated yet." };
+    hasCredit = (account.creditBalance ?? account.balance ?? 0) > 0;
+    if (!account.activatedAt && !hasCredit) return { status: 403, error: "This API key's account hasn't been activated yet." };
     allowance = account;
   }
   const blocked = blockOf(allowance, now, key.userId ? "account" : "API key");
-  if (blocked) return blocked;
+  if (blocked) {
+    if (allowance.disabled) return blocked;
+    if (!hasCredit) return blocked;
+  }
   const bucket = key.userId ? `account:${key.userId}` : key.id;
   const times = (s.recent.get(bucket) ?? []).filter((t) => t > now - 60_000);
   const perMinute = allowance.limits.perMinute;
@@ -506,11 +545,26 @@ export type AllowanceSummary = {
   remaining: { tokens: number | null; requests: number | null }; // null: no limit
   resetsAt: string | null;
   total: Counts;
+  balance?: number;
+  creditBalance?: number;
+  creditBalanceCents?: number;
 };
 
 function summarizeAllowance(a: Allowance, now: Date): AllowanceSummary {
   const used = usedInPeriod(a, now);
   const { tokens, requests } = a.limits;
+  const credit =
+    "creditBalance" in a
+      ? (a as Account).creditBalance ?? (a as Account).balance ?? 0
+      : "balance" in a
+        ? (a as Account).balance ?? 0
+        : undefined;
+  const cents =
+    "creditBalanceCents" in a
+      ? (a as Account).creditBalanceCents ?? (credit !== undefined ? Math.round(credit * 100) : 0)
+      : credit !== undefined
+        ? Math.round(credit * 100)
+        : undefined;
   return {
     status: statusOf(a, now.getTime()),
     disabled: a.disabled,
@@ -526,6 +580,9 @@ function summarizeAllowance(a: Allowance, now: Date): AllowanceSummary {
     },
     resetsAt: resetsAt(a.limits.period, now),
     total: { ...a.total },
+    ...(credit !== undefined
+      ? { balance: credit, creditBalance: credit, creditBalanceCents: cents }
+      : {}),
   };
 }
 
@@ -584,9 +641,15 @@ export type AccountSummary = AllowanceSummary & {
   activatedAt: string | null;
   maxKeys: number;
   keyCount: number;
+  balance: number;
+  creditBalance: number;
+  creditBalanceCents: number;
+  transactions?: CreditTransaction[];
 };
 
 export function summarizeAccount(account: Account, now = new Date()): AccountSummary {
+  const credit = account.creditBalance ?? account.balance ?? 0;
+  const cents = account.creditBalanceCents ?? Math.round(credit * 100);
   return {
     ...summarizeAllowance(account, now),
     userId: account.userId,
@@ -596,6 +659,10 @@ export function summarizeAccount(account: Account, now = new Date()): AccountSum
     activatedAt: account.activatedAt,
     maxKeys: account.maxKeys,
     keyCount: store().file.tokens.filter((t) => t.userId === account.userId).length,
+    balance: credit,
+    creditBalance: credit,
+    creditBalanceCents: cents,
+    transactions: (account.transactions ?? []).slice(-50).reverse(),
   };
 }
 
@@ -871,4 +938,117 @@ export async function changeTokenFile<T>(change: (file: TokenFile) => T): Promis
 
 export async function accountKeys(userId: string): Promise<ApiToken[]> {
   return (await ready()).file.tokens.filter((t) => t.userId === userId);
+}
+
+export async function addAccountCredit(
+  userId: string,
+  amountUSD: number,
+  orderId?: string | null,
+  description?: string
+): Promise<Account | null> {
+  return changeTokenFile((file) => {
+    const account = file.accounts.find((a) => a.userId === userId);
+    if (!account) return null;
+    const curr = account.creditBalance ?? account.balance ?? 0;
+    const next = Math.max(0, Number((curr + amountUSD).toFixed(6)));
+    const nextCents = Math.round(next * 100);
+    account.balance = next;
+    account.creditBalance = next;
+    account.creditBalanceCents = nextCents;
+    account.activatedAt ??= new Date().toISOString();
+
+    const tx: CreditTransaction = {
+      id: randomBytes(8).toString("hex"),
+      userId,
+      type: "deposit",
+      amountCents: Math.round(amountUSD * 100),
+      amountUSD,
+      balanceAfterCents: nextCents,
+      balanceAfterUSD: next,
+      description: description || `Deposit: +$${amountUSD.toFixed(2)}`,
+      orderId: orderId || null,
+      createdAt: new Date().toISOString(),
+    };
+    account.transactions = Array.isArray(account.transactions) ? account.transactions : [];
+    account.transactions.push(tx);
+
+    return account;
+  });
+}
+
+export async function addAccountCreditCents(
+  userId: string,
+  amountCents: number,
+  orderId?: string | null,
+  description?: string
+): Promise<Account | null> {
+  return addAccountCredit(userId, amountCents / 100, orderId, description);
+}
+
+export async function deductAccountCredit(
+  userId: string,
+  costUSD: number,
+  description?: string
+): Promise<{ previousBalance: number; newBalance: number; account: Account } | null> {
+  return changeTokenFile((file) => {
+    const account = file.accounts.find((a) => a.userId === userId);
+    if (!account) return null;
+    const curr = account.creditBalance ?? account.balance ?? 0;
+    const next = Math.max(0, Number((curr - costUSD).toFixed(6)));
+    const nextCents = Math.round(next * 100);
+    account.balance = next;
+    account.creditBalance = next;
+    account.creditBalanceCents = nextCents;
+
+    const tx: CreditTransaction = {
+      id: randomBytes(8).toString("hex"),
+      userId,
+      type: "usage",
+      amountCents: -Math.round(costUSD * 100),
+      amountUSD: -costUSD,
+      balanceAfterCents: nextCents,
+      balanceAfterUSD: next,
+      description: description || `Usage: -$${costUSD.toFixed(4)}`,
+      createdAt: new Date().toISOString(),
+    };
+    account.transactions = Array.isArray(account.transactions) ? account.transactions : [];
+    account.transactions.push(tx);
+
+    return { previousBalance: curr, newBalance: next, account };
+  });
+}
+
+export function getAccountCredit(account: Account): number {
+  return account.creditBalance ?? account.balance ?? 0;
+}
+
+export function getAccountCreditCents(account: Account): number {
+  return (
+    account.creditBalanceCents ??
+    Math.round((account.creditBalance ?? account.balance ?? 0) * 100)
+  );
+}
+
+export async function accountTransactions(userId: string): Promise<CreditTransaction[]> {
+  const s = await ready();
+  const account = accountIn(s, userId);
+  return (account?.transactions ?? []).slice(-100).reverse();
+}
+export async function deductCreditForUsage(
+  userId: string,
+  provider: string,
+  modelName: string | undefined,
+  inputTokens: number,
+  outputTokens: number
+): Promise<{ cost: UsageCost; previousBalance: number; newBalance: number } | null> {
+  const cost = calculateUsageCost(provider, modelName, inputTokens, outputTokens);
+  if (cost.totalCost <= 0) return null;
+  const description = cost.rate.model + ": " + inputTokens.toLocaleString() + " prompt + " + outputTokens.toLocaleString() + " completion tokens ($" + cost.totalCost.toFixed(6) + ")";
+  const result = await deductAccountCredit(userId, cost.totalCost, description);
+  if (!result) return null;
+  return {
+    cost,
+    previousBalance: result.previousBalance,
+    newBalance: result.newBalance,
+  };
 }

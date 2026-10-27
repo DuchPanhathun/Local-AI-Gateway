@@ -12,6 +12,8 @@ import {
 import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
 import { bodyRetryAfter, RateLimitedError, retryAfterHeaders } from "@/lib/rate-limits";
 import { checkAccess, keyRule, refusal } from "@/lib/auth";
+import { estimateTokens, getAccount, getAccountCredit, usedInPeriod } from "@/lib/api-tokens";
+import { deductCreditForUsage } from "@/lib/api-tokens";
 
 // With Fluid Compute (enabled on this project) the Hobby plan allows up to
 // 300s per invocation, not the pre-Fluid 60s cap — reasoning models like
@@ -71,6 +73,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: rule.refused }, { status: 403, headers: CORS_HEADERS });
   }
 
+  // Verify positive credit balance or active token plan
+  const account =
+    access.who === "token" && access.key.userId ? await getAccount(access.key.userId) : null;
+  const userCredit = account ? getAccountCredit(account) : 0;
+  const hasPlanTokens =
+    account &&
+    account.limits.tokens !== null &&
+    account.limits.tokens - usedInPeriod(account).tokens > 0 &&
+    (!account.providers || account.providers.includes(providerId));
+
+  if (account && userCredit <= 0 && !hasPlanTokens) {
+    return NextResponse.json(
+      {
+        error: "Insufficient credit balance. Please deposit funds on your account to continue.",
+        creditBalance: userCredit,
+      },
+      { status: 402, headers: CORS_HEADERS }
+    );
+  }
+
   if (await isProviderPaused(providerId)) {
     return NextResponse.json(
       { error: pausedMessage(providerId) },
@@ -126,6 +148,17 @@ export async function POST(req: NextRequest) {
           : { status: "error" },
         caller
       );
+      if (ok && account && userCredit > 0) {
+        const promptTokens = run.usage?.input_tokens ?? estimateTokens(prompt.length);
+        const completionTokens = run.usage?.output_tokens ?? estimateTokens(run.result?.length ?? 0);
+        await deductCreditForUsage(
+          account.userId,
+          providerId,
+          run.model || model,
+          promptTokens,
+          completionTokens
+        );
+      }
       const body = ok ? normalizeAskResponse(data) : data;
       // A CLI's usage limit is a 429 whose body says when it resets.
       const headers = { ...CORS_HEADERS, ...retryAfterHeaders(ok ? undefined : bodyRetryAfter(data)) };
@@ -170,6 +203,16 @@ export async function POST(req: NextRequest) {
 
   try {
     const { status, data } = await callProvider(providerId, { messages, ...rest }, rule.caller);
+    if (status >= 200 && status < 300 && account && userCredit > 0) {
+      const u = (data as { usage?: { prompt_tokens?: number; completion_tokens?: number } })?.usage;
+      const answer = (data as { choices?: { message?: { content?: unknown } }[] })?.choices?.[0]?.message?.content;
+      const promptChars = typeof payload.prompt === "string" ? payload.prompt.length : JSON.stringify(messages).length;
+      const answerChars = typeof answer === "string" ? answer.length : 0;
+      const promptTokens = u?.prompt_tokens ?? estimateTokens(promptChars);
+      const completionTokens = u?.completion_tokens ?? estimateTokens(answerChars);
+      const modelName = (data as { model?: string })?.model || (payload.model as string | undefined);
+      await deductCreditForUsage(account.userId, providerId, modelName, promptTokens, completionTokens);
+    }
     return NextResponse.json(data, { status, headers: CORS_HEADERS });
   } catch (err) {
     if (err instanceof RateLimitedError) {

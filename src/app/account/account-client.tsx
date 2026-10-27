@@ -13,14 +13,18 @@ import {
   ago,
   limitsText,
   STATUS_BADGES,
+  TOOL_ONLY,
   UsageCell,
   type KeyStatus,
 } from "../api-keys";
 import { Icon, type IconName } from "../icons";
 import { Logo } from "../logo";
 import styles from "../page.module.css";
-import { PROVIDER_OPTIONS } from "../providers";
+import { MODEL_NAMES, PROVIDER_OPTIONS } from "../providers";
 import { CopyButton, formatCount, UsagePanel, type MonthUsage, type UsageCounts } from "../ui";
+import { DEFAULT_PACKS } from "@/lib/token-packs";
+import { getModelPricing } from "@/lib/pricing";
+import type { CreditTransaction } from "@/lib/api-tokens";
 
 type Plan = {
   status: KeyStatus;
@@ -42,6 +46,10 @@ type Plan = {
   createdAt: string;
   activatedAt: string | null;
   maxKeys: number;
+  balance?: number;
+  creditBalance?: number;
+  creditBalanceCents?: number;
+  transactions?: CreditTransaction[];
 };
 
 type OwnKey = {
@@ -83,6 +91,9 @@ type Purchase = {
   paidAt: string | null;
   applied: string | null;
   code: string | null; // only while it waits to be redeemed
+  type?: "pack" | "deposit";
+  amountUSD?: number;
+  creditCents?: number;
 };
 
 type ShopData = {
@@ -96,16 +107,23 @@ type Mode = "signin" | "signup" | "forgot" | "reset";
 type AccountView = "overview" | "keys" | "usage" | "buy";
 
 const VIEWS: { id: AccountView; label: string; icon: IconName; description: string }[] = [
-  { id: "overview", label: "Overview", icon: "dashboard", description: "Your plan, what's left on it, and codes." },
-  { id: "keys", label: "API keys", icon: "key", description: "Keys for your apps. They all share your plan." },
+  { id: "overview", label: "Overview", icon: "dashboard", description: "Your plan, credit balance, what's left on it, and codes." },
+  { id: "keys", label: "API keys", icon: "key", description: "Keys for your apps. They all share your plan and credit balance." },
   { id: "usage", label: "Usage", icon: "analytics", description: "What your keys have used, by day and model (UTC)." },
-  { id: "buy", label: "Buy tokens", icon: "cart", description: "Prepaid tokens at half the market price or less, paid with PayPal." },
+  { id: "buy", label: "Deposit & Packs", icon: "cart", description: "Deposit credits for pay-as-you-go model access, or buy prepaid token packs with PayPal." },
 ];
 
-const LABELS = new Map<string, string>(PROVIDER_OPTIONS.map((p) => [p.id, p.label]));
+// Customers see models, never how they're reached.
+const LABELS = new Map<string, string>(Object.entries(MODEL_NAMES));
 const PERIOD_USED = { day: "today", month: "this month", total: "in total" };
 const REFRESH_MS = 30_000;
-const usd = (cents: number) => `$${(cents / 100).toFixed(2)}`;
+const PRESET_DEPOSITS = [5, 10, 25, 50, 100];
+const formatUSD = (amount: number) => {
+  if (amount === 0) return "$0.00";
+  if (amount < 0.01 && amount > 0) return "$" + amount.toFixed(4);
+  return "$" + amount.toFixed(2);
+};
+const usd = (cents: number) => "$" + (cents / 100).toFixed(2);
 const CONFIGURED = Boolean(
   process.env.NEXT_PUBLIC_SUPABASE_URL &&
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
@@ -120,11 +138,11 @@ function authMessage(message: string): string {
   return message;
 }
 
-function exampleCall(base: string, key: string): string {
+function exampleCall(base: string, key: string, provider = "groq"): string {
   return `curl ${base}/api/chat \\
   -H "Authorization: Bearer ${key}" \\
   -H "Content-Type: application/json" \\
-  -d '{"provider": "groq", "messages": [{"role": "user", "content": "Hello!"}]}'`;
+  -d '{"provider": "${provider}", "messages": [{"role": "user", "content": "Hello!"}]}'`;
 }
 
 export function AccountDashboard() {
@@ -152,6 +170,8 @@ export function AccountDashboard() {
   const [shopNotice, setShopNotice] = useState<string | null>(null);
   const [shopError, setShopError] = useState<string | null>(null);
   const paypalHandled = useRef(false);
+  const [depositAmount, setDepositAmount] = useState<number>(10);
+  const [customAmount, setCustomAmount] = useState<string>("10");
   const [revealed, setRevealed] = useState<{
     name: string;
     secret: string;
@@ -254,10 +274,12 @@ export function AccountDashboard() {
       }
       setShopNotice(
         json.status === "pending"
-          ? "PayPal has your payment but it hasn't cleared yet. Your tokens are added once it does: check again under Your purchases."
-          : json.applied
-            ? `Thank you! ${json.applied}`
-            : `Thank you! Your payment went through, but the pack couldn't be added to your plan yet. Redeem this code when it can: ${json.code}`,
+          ? "PayPal has your payment but it hasn't cleared yet. Your credit or tokens are added once it does: check again under Your purchases."
+          : json.type === "deposit" || json.creditCents
+            ? `Thank you! ${formatUSD(Number(json.creditCents ?? json.priceCents ?? 0) / 100)} deposit credited to your balance.`
+            : json.applied
+              ? `Thank you! ${json.applied}`
+              : `Thank you! Your payment went through, but the pack couldn't be added to your plan yet. Redeem this code when it can: ${json.code}`,
       );
       await load();
     }
@@ -363,6 +385,29 @@ export function AccountDashboard() {
       setRevealed({ name: key.name, secret: json.token as string });
       setKeyName("");
       await load();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function deposit(amount: number) {
+    if (!amount || isNaN(amount) || amount < 1) {
+      setShopError("Minimum deposit amount is $1.00");
+      return;
+    }
+    setShopError(null);
+    setShopNotice(null);
+    setBusy("deposit");
+    try {
+      const json = await call(
+        "POST", "/api/account/orders", { amountUSD: amount, amount: amount, amountCents: Math.round(amount * 100), depositAmountCents: Math.round(amount * 100), depositAmount: amount },
+        setShopError,
+      );
+      if (json?.approveUrl) {
+        setShopNotice("Taking you to PayPal…");
+        window.location.href = json.approveUrl as string;
+        return;
+      }
     } finally {
       setBusy(null);
     }
@@ -586,6 +631,16 @@ export function AccountDashboard() {
   const today = new Date(loadedAt || 0).toISOString().slice(0, 10);
   const when = plan ? PERIOD_USED[plan.limits.period] : "";
   const pending = plan?.status === "pending";
+  const creditBalance = plan?.creditBalance ?? plan?.balance ?? ((plan?.creditBalanceCents ?? 0) / 100);
+  const hasCredit = creditBalance > 0;
+  // When credit is available, all models are unlocked!
+  const allProviders = PROVIDER_OPTIONS.map((p) => p.id as string);
+  const models = hasCredit
+    ? allProviders
+    : (plan?.providers ?? allProviders).filter(
+        (id) => plan?.agentTools || !TOOL_ONLY.includes(id),
+      );
+  const firstModel = models[0] ?? "groq";
   const current = VIEWS.find((v) => v.id === view) ?? VIEWS[0];
 
   const redeemSection = (
@@ -630,7 +685,18 @@ export function AccountDashboard() {
 
   const overviewView = plan && data && (
     <>
-      {pending && (
+      {hasCredit && (
+        <div className={styles.reveal} style={{ marginBottom: 20 }}>
+          <div className={styles.revealLabel} style={{ marginBottom: 4, fontWeight: 600 }}>
+            Pay-As-You-Go Active ({formatUSD(creditBalance)} available)
+          </div>
+          <div className={styles.cellNote}>
+            All models and agent tools are unlocked. Request costs are deducted per token at wholesale provider rates.
+          </div>
+        </div>
+      )}
+
+      {pending && !hasCredit && (
         <section className={styles.section}>
           <div className={styles.sectionHeader}>
             <span className={styles.sectionTitle}>Activate your account</span>
@@ -647,7 +713,7 @@ export function AccountDashboard() {
               </span>
               <span>
                 <span className={styles.actionTitle}>Buy tokens</span>
-                <span className={styles.actionDesc}>Half the market price or less, with PayPal</span>
+                <span className={styles.actionDesc}>10 times cheaper than the market, with PayPal</span>
               </span>
             </button>
             <button type="button" className={styles.actionRow} onClick={() => setView("keys")}>
@@ -664,6 +730,20 @@ export function AccountDashboard() {
       )}
 
       <div className={styles.statGrid}>
+        <div className={styles.statCard}>
+          <div className={styles.statHead}>
+            <span className={styles.statLabel}>Credit balance</span>
+            <span className={styles.statIcon}>
+              <Icon name="cart" />
+            </span>
+          </div>
+          <div className={styles.statValue}>
+            {formatUSD(creditBalance)}
+          </div>
+          <div className={styles.statSub}>
+            {hasCredit ? "All models unlocked · Pay-as-you-go" : "Deposit funds to unlock all models"}
+          </div>
+        </div>
         <div className={styles.statCard}>
           <div className={styles.statHead}>
             <span className={styles.statLabel}>Status</span>
@@ -728,8 +808,8 @@ export function AccountDashboard() {
           <p className={styles.sectionDesc}>
             {limitsText(plan)}.{" "}
             {plan.providers
-              ? `Providers: ${plan.providers.map((p) => LABELS.get(p) ?? p).join(", ")}.`
-              : "Every provider."}
+              ? `Models: ${plan.providers.map((p) => LABELS.get(p) ?? p).join(", ")}.`
+              : "Every model."}
             {plan.resetsAt &&
               ` Your ${plan.limits.period === "day" ? "daily" : "monthly"} limits start over on ${new Date(plan.resetsAt).toLocaleString()}.`}
             {plan.status === "disabled" && " The admin has turned your account off for now."}
@@ -802,7 +882,7 @@ export function AccountDashboard() {
             <div className={styles.revealRow}>
               <span className={styles.revealValue}>{revealed.secret}</span>
               <CopyButton value={revealed.secret} />
-              <CopyButton label="Copy example" value={exampleCall(base, revealed.secret)} />
+              <CopyButton label="Copy example" value={exampleCall(base, revealed.secret, firstModel)} />
               <button type="button" className={styles.buttonGhost} onClick={() => setRevealed(null)}>
                 Done
               </button>
@@ -872,15 +952,59 @@ export function AccountDashboard() {
           <span className={styles.sectionTitle}>Calling the API</span>
         </div>
         <p className={styles.sectionDesc}>
-          The address is <code>{base}</code>. Every endpoint, model and option is
-          in the <Link href="/documents" className={styles.inlineLink}>docs</Link>.
+          The address is <code>{base}</code>. Every endpoint and option is in
+          the <Link href="/documents" className={styles.inlineLink}>docs</Link>.
           Check what a key has left with <code>GET /api/me</code>.
         </p>
         <div className={styles.codeBlock}>
           <div className={styles.codeBlockBody}>
-            <pre className={styles.pre}>{exampleCall(base, "$YOUR_KEY")}</pre>
-            <CopyButton value={exampleCall(base, "$YOUR_KEY")} />
+            <pre className={styles.pre}>{exampleCall(base, "$YOUR_KEY", firstModel)}</pre>
+            <CopyButton value={exampleCall(base, "$YOUR_KEY", firstModel)} />
           </div>
+        </div>
+                <div className={styles.sectionHeader} style={{ marginTop: 8 }}>
+          <span className={styles.sectionTitle}>Models you can use</span>
+          {hasCredit && (
+            <span className={`${styles.badge} ${styles.badgeSuccess}`}>
+              All models unlocked with credit
+            </span>
+          )}
+        </div>
+        <p className={styles.sectionDesc}>
+          {hasCredit
+            ? "Your credit balance unlocks every model and tool with pay-as-you-go pricing. Send the model provider value in your request."
+            : "Send the model provider value in your request, as in the example."}
+        </p>
+        <div className={styles.tableWrap}>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>provider</th>
+                <th>Access</th>
+                <th>Prompt rate</th>
+                <th>Completion rate</th>
+              </tr>
+            </thead>
+            <tbody>
+              {models.map((id) => {
+                const rate = getModelPricing(id);
+                return (
+                  <tr key={id}>
+                    <td className={styles.strong}>{LABELS.get(id) ?? rate.model ?? id}</td>
+                    <td className={styles.mono}>{id}</td>
+                    <td>
+                      <span className={`${styles.badge} ${hasCredit ? styles.badgeSuccess : ""}`}>
+                        {hasCredit ? "Unlocked" : "Included"}
+                      </span>
+                    </td>
+                    <td className={styles.dim}>${rate.inputPricePerMillion.toFixed(2)} / 1M</td>
+                    <td className={styles.dim}>${rate.outputPricePerMillion.toFixed(2)} / 1M</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </section>
     </>
@@ -899,17 +1023,31 @@ export function AccountDashboard() {
     </section>
   );
 
+  const defaultPacks: Pack[] = DEFAULT_PACKS.map((p) => ({
+    id: p.id,
+    name: p.name,
+    description: p.description,
+    tokens: p.tokens,
+    providers: p.providers,
+    days: p.days,
+    priceCents: p.priceCents,
+    pricing: {
+      marketCents: Math.round(p.marketPriceUSD * 100),
+      savingPercent: p.savingPercent,
+    },
+  }));
+  const activePacks = shop?.packs && shop.packs.length > 0 ? shop.packs : defaultPacks;
+
   const buyView = plan && (
     <section className={styles.section}>
       <div className={styles.sectionHeader}>
-        <span className={styles.sectionTitle}>Packs</span>
+        <span className={styles.sectionTitle}>Deposit credit</span>
         {shop?.payments.configured && !shop.payments.live && (
           <span className={`${styles.badge} ${styles.badgeWarning}`}>Test payments</span>
         )}
       </div>
       <p className={styles.sectionDesc}>
-        Prepaid tokens, paid with PayPal and added to your plan at once.
-        Buying another pack for the same providers adds to what you have left.
+        Add credit to your balance to unlock all models and pay only for what you use. Paid with PayPal.
       </p>
       {shopNotice && (
         <div className={styles.reveal}>
@@ -923,18 +1061,59 @@ export function AccountDashboard() {
           {shopError}
         </div>
       )}
-      {!shop ? (
-        <p className={styles.empty}>Loading…</p>
-      ) : shop.packs.length > 0 ? (
+
+      <div className={styles.depositCard}>
+        <div className={styles.depositBalanceRow}>
+          <div>
+            <div className={styles.statLabel}>Current Credit Balance</div>
+            <div className={styles.statValue} style={{ fontSize: "1.75rem", marginTop: 4 }}>
+              {formatUSD(creditBalance)}
+            </div>
+            <div className={styles.cellNote} style={{ marginTop: 2 }}>
+              {hasCredit ? "Active · Pay-as-you-go access to all models and agent tools" : "Deposit credit to unlock all models without pack limits"}
+            </div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <span className={`${styles.badge} ${hasCredit ? styles.badgeSuccess : styles.badgeWarning}`}>
+              {hasCredit ? "Unrestricted Access" : "Zero Balance"}
+            </span>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 16 }}>
+          <div className={styles.fieldLabel}>Select Deposit Amount (USD)</div>
+          <div className={styles.presetGrid}>
+            {PRESET_DEPOSITS.map((amt) => (
+              <button key={amt} type="button" className={`${styles.presetBtn} ${depositAmount === amt && customAmount === String(amt) ? styles.presetBtnActive : ""}`} onClick={() => { setDepositAmount(amt); setCustomAmount(String(amt)); }}>${amt}</button>
+            ))}
+          </div>
+
+          <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 14, flexWrap: "wrap" }}>
+            <div style={{ position: "relative", width: 140 }}>
+              <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }}>$</span>
+              <input type="number" min="1" max="1000" step="1" value={customAmount} onChange={(e) => { setCustomAmount(e.target.value); const num = parseFloat(e.target.value); if (!isNaN(num) && num > 0) setDepositAmount(num); }} className={styles.input} style={{ paddingLeft: 24 }} placeholder="Custom" />
+            </div>
+            <button type="button" className={styles.button} disabled={busy !== null || isNaN(depositAmount) || depositAmount < 1} onClick={() => deposit(depositAmount)}>{busy === "deposit" ? "Opening PayPal…" : `Deposit $${depositAmount || 0} with PayPal`}</button>
+          </div>
+          <p className={styles.fieldHint} style={{ marginTop: 8 }}>Deposits are credited immediately once completed via PayPal. Minimum $1.00.</p>
+        </div>
+      </div>
+
+      <div className={styles.sectionHeader} style={{ marginTop: 32 }}>
+        <span className={styles.sectionTitle}>Prepaid token packs</span>
+      </div>
+      <p className={styles.sectionDesc}>Prepaid tokens, paid with PayPal and added to your plan at once. Buying another pack for the same models adds to what you have left.</p>
+
+      {activePacks.length > 0 ? (
         <div className={styles.packGrid}>
-          {shop.packs.map((p) => (
+          {activePacks.map((p) => (
             <div key={p.id} className={styles.packCard}>
               <div className={styles.strong}>{p.name}</div>
               {p.description && <div className={styles.cellNote}>{p.description}</div>}
               <div className={styles.packPrice}>{usd(p.priceCents)}</div>
               <div className={styles.packFacts}>
                 {formatCount(p.tokens)} tokens ·{" "}
-                {p.providers ? p.providers.map((id) => LABELS.get(id) ?? id).join(", ") : "every provider"}
+                {p.providers ? p.providers.map((id) => LABELS.get(id) ?? id).join(", ") : "every model"}
                 {p.days ? ` · ${p.days} days` : ""}
               </div>
               {p.pricing.marketCents !== null && (
@@ -946,7 +1125,7 @@ export function AccountDashboard() {
                 <button
                   type="button"
                   className={`${styles.button} ${styles.buttonFull}`}
-                  disabled={busy !== null || !shop.payments.configured || plan.status === "disabled"}
+                  disabled={busy !== null || (shop !== null && !shop.payments.configured) || plan.status === "disabled"}
                   onClick={() => buy(p)}
                 >
                   {busy === p.id ? "Opening PayPal…" : "Buy with PayPal"}
@@ -958,18 +1137,90 @@ export function AccountDashboard() {
       ) : (
         <p className={styles.empty}>No packs are on sale yet. Check back soon, or redeem a code on the Overview page.</p>
       )}
-      {shop && !shop.payments.configured && shop.packs.length > 0 && (
+      {shop && !shop.payments.configured && activePacks.length > 0 && (
         <p className={styles.fieldHint} style={{ marginTop: 10 }}>
           Payments aren&apos;t open yet. Check back soon.
         </p>
       )}
+      {plan.transactions && plan.transactions.length > 0 && (
+        <>
+          <div className={styles.sectionHeader} style={{ marginTop: 32 }}>
+            <span className={styles.sectionTitle}>Credit & deduction history</span>
+          </div>
+          <p className={styles.sectionDesc}>
+            Recent credit deposits and per-request token usage deductions.
+          </p>
+          <div className={styles.tableWrap} style={{ marginTop: 8 }}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th>Description</th>
+                  <th>Amount</th>
+                  <th>Balance after</th>
+                </tr>
+              </thead>
+              <tbody>
+                {plan.transactions.map((tx) => (
+                  <tr key={tx.id}>
+                    <td className={styles.dim} style={{ whiteSpace: "nowrap" }}>
+                      {new Date(tx.createdAt).toLocaleString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </td>
+                    <td>
+                      <span
+                        className={`${styles.badge} ${
+                          tx.type === "deposit"
+                            ? styles.badgeSuccess
+                            : tx.type === "usage"
+                            ? ""
+                            : styles.badgeWarning
+                        }`}
+                      >
+                        {tx.type}
+                      </span>
+                    </td>
+                    <td>{tx.description}</td>
+                    <td
+                      style={{
+                        whiteSpace: "nowrap",
+                        fontWeight: 600,
+                        color: tx.amountCents >= 0 ? "var(--success, #10b981)" : "inherit",
+                      }}
+                    >
+                      {tx.amountCents >= 0 ? `+${formatUSD(tx.amountUSD)}` : `-${formatUSD(Math.abs(tx.amountUSD))}`}
+                    </td>
+                    <td className={styles.mono} style={{ whiteSpace: "nowrap" }}>
+                      {formatUSD(tx.balanceAfterUSD)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
       {shop && shop.orders.length > 0 && (
         <>
-          <div className={styles.sectionHeader} style={{ marginTop: 20 }}>
-            <span className={styles.sectionTitle}>Your purchases</span>
+          <div className={styles.sectionHeader} style={{ marginTop: 32 }}>
+            <span className={styles.sectionTitle}>Purchases & deposits</span>
           </div>
           <div className={styles.tableWrap} style={{ marginTop: 8 }}>
             <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Item</th>
+                  <th>Amount</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
               <tbody>
                 {shop.orders.map((o) => (
                   <tr key={o.id}>
@@ -981,6 +1232,8 @@ export function AccountDashboard() {
                         <button type="button" className={styles.buttonGhost} disabled={busy !== null} onClick={() => checkAgain(o)}>
                           Clearing: check again
                         </button>
+                      ) : o.type === "deposit" || o.creditCents ? (
+                        <span className={`${styles.badge} ${styles.badgeSuccess}`}>Credited to balance</span>
                       ) : o.applied ? (
                         <span className={styles.dim}>Added to your plan</span>
                       ) : (
@@ -996,6 +1249,7 @@ export function AccountDashboard() {
           </div>
         </>
       )}
+
     </section>
   );
 

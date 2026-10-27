@@ -1,7 +1,7 @@
 "use client";
 
 // The console's Shop page: prepaid token packs people buy on /account with
-// PayPal, the market prices their prices are held to (at most half), and
+// PayPal, the market prices their prices are held to (at most a tenth), and
 // every order.
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
@@ -292,9 +292,10 @@ export function Shop({ providers }: { providers: ProviderOption[] }) {
         </div>
         <p className={styles.sectionDesc}>
           Prepaid tokens people buy on their account page with PayPal. A
-          pack&apos;s price is at most half what its tokens cost at the market
-          price of the cheapest provider it covers, so it&apos;s half price or
-          less whichever they use. Buying another pack adds to what&apos;s left.
+          pack&apos;s price is at most a tenth of what its tokens cost at the
+          market price of the cheapest provider it covers, so it&apos;s at least
+          10 times cheaper whichever they use. Buyers see model names, not
+          providers. Buying another pack adds to what&apos;s left.
           Paid: {usd(revenue)} from {[...sales.values()].reduce((n, s) => n + s.count, 0)} orders.
         </p>
 

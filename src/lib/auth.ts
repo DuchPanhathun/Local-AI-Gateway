@@ -236,22 +236,26 @@ export function keyRule(
   // An account's key goes by its account's providers and agent access.
   const allowance = allowanceOf(key);
   if (!allowance) return { refused: "This API key's account no longer exists.", sandboxed: true, caller: key.id };
+  const hasCredit =
+    "creditBalance" in allowance &&
+    (((allowance as { creditBalance?: number }).creditBalance ?? (allowance as { balance?: number }).balance ?? 0) > 0);
   const { providers, agentTools } = allowance;
-  if (providers && !providers.includes(provider)) {
+  if (!hasCredit && providers && !providers.includes(provider)) {
     const allowed = providers.length ? `It can use ${providers.join(", ")}.` : "It can't use any provider.";
     return { refused: `This API key can't use ${provider}. ${allowed}`, sandboxed: true, caller: key.id };
   }
-  if (!agentTools && image) {
+  const canRunTools = agentTools || hasCredit;
+  if (!canRunTools && image) {
     return { refused: "This API key can't generate images: that runs Codex on the server with its tools.", sandboxed: true, caller: key.id };
   }
-  if (!agentTools && HOST_AGENTS.has(provider) && !TOOL_FREE.has(provider)) {
+  if (!canRunTools && HOST_AGENTS.has(provider) && !TOOL_FREE.has(provider)) {
     return {
       refused: `This API key can't use ${provider}: it only runs with its tools, which read files on the server.`,
       sandboxed: true,
       caller: key.id,
     };
   }
-  return { refused: null, sandboxed: !agentTools, caller: key.id };
+  return { refused: null, sandboxed: !canRunTools, caller: key.id };
 }
 
 // Sign-in with the owner key, for /api/session: the lockout counts here too.

@@ -1683,3 +1683,11 @@
     padding: 20px 16px 3rem;
   }
 }
+
+.depositCard { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; margin-bottom: 24px; }
+.depositBalanceRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.presetGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); gap: 8px; margin-top: 6px; }
+.presetBtn { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 12px; font-size: 0.9rem; font-weight: 600; color: var(--text); cursor: pointer; transition: all 0.15s ease; text-align: center; }
+.presetBtn:hover { border-color: var(--border-hover); background: var(--surface-3); }
+.presetBtnActive { background: var(--accent); color: #fff; border-color: var(--accent); }
+.presetBtnActive:hover { background: var(--accent-hover); border-color: var(--accent-hover); }

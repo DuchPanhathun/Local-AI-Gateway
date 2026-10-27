@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { changeTokenFile, readTokenFile, usedInPeriod, type Account, type TokenFile } from "./api-tokens";
 import { describeCode, issueCodeIn, RedeemError, redeemIn, sameOrFewer, type Grant } from "./redeem-codes";
+import { DEFAULT_PACKS, type TokenPack } from "./token-packs";
+
+export { DEFAULT_PACKS, type TokenPack };
 
 // The shop on /account: prepaid packs of tokens that people buy with PayPal.
-// A pack's price is at most half what its tokens cost at the market price of
-// the cheapest provider it can be used on, so it's half price or less however
-// its tokens are spent. A paid order becomes a single-use redeem code that's
+// A pack's price is at most a tenth of what its tokens cost at the market
+// price of the cheapest provider it can be used on, so it's at least 10 times
+// cheaper however its tokens are spent. A paid order becomes a single-use redeem code that's
 // redeemed on the buyer's account at once (or, if it can't be yet, kept for
 // them to redeem), so a payment is never lost. Packs, market prices and
 // orders are kept in tokens.json with the accounts and codes.
@@ -15,7 +18,7 @@ import { describeCode, issueCodeIn, RedeemError, redeemIn, sameOrFewer, type Gra
 // back to /account, and we capture it then. An order approved but never
 // captured takes no money.
 
-export const MAX_SHARE = 0.5; // of the market value: "at least 2 times cheaper"
+export const MAX_SHARE = 0.1; // of the market value: "at least 10 times cheaper"
 const IN_PER_OUT = 3; // input tokens for each output token, for a blended price (3:1, as price trackers use)
 export const CURRENCY = "USD"; // market prices are in US dollars
 
@@ -54,13 +57,30 @@ export type Pack = {
 };
 
 export type OrderStatus = "created" | "pending" | "paid" | "cancelled";
+export type OrderType = "pack" | "deposit";
+
+export type PredefinedDeposit = {
+  amountUSD: number;
+  amountCents: number;
+  label: string;
+};
+
+export const PREDEFINED_DEPOSIT_AMOUNTS: PredefinedDeposit[] = [
+  { amountUSD: 5, amountCents: 500, label: "$5" },
+  { amountUSD: 10, amountCents: 1000, label: "$10" },
+  { amountUSD: 25, amountCents: 2500, label: "$25" },
+  { amountUSD: 50, amountCents: 5000, label: "$50" },
+  { amountUSD: 100, amountCents: 10000, label: "$100" },
+];
 
 export type Order = {
   id: string; // PayPal's
+  type?: OrderType;
   packId: string;
   packName: string;
   grant: Grant; // the pack as it was ordered
   priceCents: number;
+  creditCents?: number;
   currency: string;
   userId: string;
   email: string;
@@ -88,6 +108,21 @@ export class ShopError extends Error {
 function shopOf(file: TokenFile): Shop {
   file.shop ??= { market: {}, packs: [], orders: [] };
   file.shop.market = { ...DEFAULT_MARKET, ...file.shop.market };
+  file.shop.packs ??= [];
+  for (const def of DEFAULT_PACKS) {
+    const existingIndex = file.shop.packs.findIndex((p) => p.id === def.id);
+    if (existingIndex === -1) {
+      file.shop.packs.push({ ...def });
+    } else {
+      file.shop.packs[existingIndex] = {
+        ...def,
+        ...file.shop.packs[existingIndex],
+        priceCents: def.priceCents,
+        tokens: def.tokens,
+        providers: def.providers,
+      };
+    }
+  }
   return file.shop;
 }
 
@@ -109,7 +144,7 @@ function cheapest(providers: string[] | null, market: Record<string, MarketPrice
 
 export type PackPricing = {
   marketCents: number | null; // what its tokens cost at the cheapest provider's market price
-  maxPriceCents: number | null; // half of that, rounded down
+  maxPriceCents: number | null; // a tenth of that, rounded down
   cheapest: { provider: string; model: string; perMillion: number } | null;
   savingPercent: number | null;
   withinLimit: boolean;
@@ -221,7 +256,7 @@ export function parsePack(
       400,
       p.maxPriceCents === null
         ? "None of its providers has a market price to compare with."
-        : `Too dear: these tokens cost $${((p.marketCents ?? 0) / 100).toFixed(2)} at the market price of ${p.cheapest?.model}, so the pack can cost at most $${(p.maxPriceCents / 100).toFixed(2)} (half).`
+        : `Too dear: these tokens cost $${((p.marketCents ?? 0) / 100).toFixed(2)} at the market price of ${p.cheapest?.model}, so the pack can cost at most $${(p.maxPriceCents / 100).toFixed(2)} (a tenth).`
     );
   }
   return pack;
@@ -446,6 +481,84 @@ export async function startOrder(
   return { orderId: order.id, approveUrl: approve };
 }
 
+// Starts depositing arbitrary or predefined credit for the signed-in user:
+// creates the PayPal order and returns the approveUrl.
+export async function startDepositOrder(
+  user: { id: string; email: string },
+  amountCents: number,
+  returnBase: string
+): Promise<{ orderId: string; approveUrl: string }> {
+  if (
+    typeof amountCents !== "number" ||
+    !Number.isInteger(amountCents) ||
+    amountCents < 100 ||
+    amountCents > 100_000
+  ) {
+    throw new ShopError(
+      400,
+      "Deposit amount must be a whole number of cents between 100 ($1.00) and 100,000 ($1,000.00)."
+    );
+  }
+  if (!paypalConfig()) throw new ShopError(503, "Payments aren't set up yet.");
+  const file = await readTokenFile();
+  const account = file.accounts.find((a) => a.userId === user.id);
+  if (!account) throw new ShopError(409, "Your account isn't ready yet: reload the page and try again.");
+  if (account.disabled) throw new ShopError(403, "Your account is turned off, so it can't deposit credit.");
+
+  const usdValue = money(amountCents);
+  const { status, data } = await paypal("/v2/checkout/orders", {
+    method: "POST",
+    requestId: randomUUID(),
+    body: {
+      intent: "CAPTURE",
+      purchase_units: [
+        {
+          reference_id: "credit-deposit",
+          custom_id: user.id,
+          description: `Credit deposit: $${usdValue}`,
+          amount: { currency_code: CURRENCY, value: usdValue },
+        },
+      ],
+      payment_source: {
+        paypal: {
+          experience_context: {
+            brand_name: "Thun Murex",
+            user_action: "PAY_NOW",
+            shipping_preference: "NO_SHIPPING",
+            return_url: `${returnBase}/account?paypal=return`,
+            cancel_url: `${returnBase}/account?paypal=cancel`,
+          },
+        },
+      },
+    },
+  });
+  const order = data as unknown as PayPalOrder;
+  const approve = order.links?.find((l) => l.rel === "payer-action" || l.rel === "approve")?.href;
+  if (status >= 300 || !order.id || !approve) throw new ShopError(502, paypalProblem(data, status));
+
+  await changeTokenFile((f) => {
+    shopOf(f).orders.push({
+      id: order.id,
+      type: "deposit",
+      packId: "credit-deposit",
+      packName: `Deposit $${usdValue} credit`,
+      grant: { kind: "topup", plan: null, addTokens: null, addRequests: null, addDays: null },
+      priceCents: amountCents,
+      creditCents: amountCents,
+      currency: CURRENCY,
+      userId: user.id,
+      email: user.email,
+      status: "created",
+      createdAt: new Date().toISOString(),
+      paidAt: null,
+      captureId: null,
+      code: null,
+      applied: null,
+    });
+  });
+  return { orderId: order.id, approveUrl: approve };
+}
+
 // Orders being finished right now: a reload or a second click waits for the
 // first instead of capturing twice.
 const finishing = new Map<string, Promise<Order>>();
@@ -502,6 +615,38 @@ async function finish(user: { id: string }, orderId: string): Promise<Order> {
       o.captureId = capture.id;
       return o;
     }
+    if (o.type === "deposit" || o.packId === "credit-deposit") {
+      const amountUSD = o.priceCents / 100;
+      const account = f.accounts.find((a) => a.userId === o.userId);
+      if (account) {
+        const curr = account.creditBalance ?? account.balance ?? 0;
+        const next = Math.max(0, Number((curr + amountUSD).toFixed(6)));
+        const nextCents = Math.round(next * 100);
+        account.balance = next;
+        account.creditBalance = next;
+        account.creditBalanceCents = nextCents;
+        account.activatedAt ??= new Date().toISOString();
+
+        const tx = {
+          id: randomUUID().slice(0, 16),
+          userId: o.userId,
+          type: "deposit" as const,
+          amountCents: o.priceCents,
+          amountUSD,
+          balanceAfterCents: nextCents,
+          balanceAfterUSD: next,
+          description: `PayPal deposit (${o.id}): +$${amountUSD.toFixed(2)}`,
+          orderId: o.id,
+          createdAt: new Date().toISOString(),
+        };
+        account.transactions = Array.isArray(account.transactions) ? account.transactions : [];
+        account.transactions.push(tx);
+      }
+      const applied = `Added $${amountUSD.toFixed(2)} to your credit balance.`;
+      Object.assign(o, { status: "paid", paidAt: new Date().toISOString(), captureId: capture.id, code: null, applied });
+      return o;
+    }
+
     const code = issueCodeIn(f, o.grant, `PayPal order ${o.id} · ${o.email}`);
     // Redeemed now, unless that would throw away tokens bought before (their
     // plan changed since they ordered): then it's kept for them to redeem.
@@ -537,8 +682,10 @@ export async function ordersOf(userId: string) {
     .reverse()
     .map((o) => ({
       id: o.id,
+      type: o.type ?? "pack",
       packName: o.packName,
       priceCents: o.priceCents,
+      creditCents: o.creditCents ?? (o.type === "deposit" ? o.priceCents : null),
       currency: o.currency,
       status: o.status,
       createdAt: o.createdAt,

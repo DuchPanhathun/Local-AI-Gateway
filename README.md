@@ -446,11 +446,11 @@ PayPal; the tokens are on their account as soon as PayPal takes the payment. You
 the console's **Shop** page: a number of tokens, the providers they work on, how many days they last
 (or no end), requests a minute, max keys, and a price in US dollars.
 
-**A pack costs at most half the market price.** The Shop page keeps a market price for each
+**A pack costs at most a tenth of the market price.** The Shop page keeps a market price for each
 provider: what its default model costs per million tokens elsewhere (October 2026 list prices,
 blended 3 tokens in to 1 out, as price trackers do), which you can edit. A pack's price can't be
-saved above half of its tokens at the market price of the **cheapest** provider it covers, so it's
-half price or less whichever provider the tokens are spent on. The form shows the market value and
+saved above a tenth of its tokens at the market price of the **cheapest** provider it covers, so it's
+at least 10 times cheaper whichever provider the tokens are spent on. The form shows the market value and
 the most you can ask, as you type. When you lower a market price, a pack it puts over the limit
 leaves the shop until you lower its price too.
 

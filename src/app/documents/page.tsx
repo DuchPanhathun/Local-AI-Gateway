@@ -1119,7 +1119,7 @@ export default function DocumentsPage() {
               Prepaid token packs people buy on their <Link href="/account">account page</Link>{" "}
               with PayPal. <code>GET</code> returns the packs with their <code>pricing</code>, the
               market prices, every order and whether payments are set up. A pack’s price can be at
-              most half of its tokens at the market price of the cheapest provider it covers.{" "}
+              most a tenth of its tokens at the market price of the cheapest provider it covers.{" "}
               <code>PATCH /api/shop</code> with <code>{`{"market": {"groq": {"input": 0.15, "output": 0.6}}}`}</code>{" "}
               changes market prices (US dollars per million tokens). The console’s Shop page does
               the same.
@@ -1127,7 +1127,7 @@ export default function DocumentsPage() {
             <Fields
               rows={[
                 ["name", "string", "What buyers see it as.", true],
-                ["price", "number", "In US dollars, like 1.31. At most half the market value.", true],
+                ["price", "number", "In US dollars, like 0.26. At most a tenth of the market value.", true],
                 ["tokens", "number", "How many tokens it gives, prepaid.", true],
                 ["providers", "string[]", <>The providers they work on. <code>null</code>: all of them (priced by the cheapest).</>],
                 ["days", "number", "How long they last. Empty: no end."],

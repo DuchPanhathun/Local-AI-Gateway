@@ -12,6 +12,8 @@ import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
 import { bodyRetryAfter, RateLimitedError, retryAfterHeaders } from "@/lib/rate-limits";
 import { checkAccess, keyRule, refusal } from "@/lib/auth";
 import { withKeepAlive } from "@/lib/sse";
+import { estimateTokens, getAccount, getAccountCredit, usedInPeriod } from "@/lib/api-tokens";
+import { deductCreditForUsage } from "@/lib/api-tokens";
 
 export const maxDuration = 300;
 
@@ -75,6 +77,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: rule.refused }, { status: 403, headers: CORS_HEADERS });
   }
 
+  // Verify positive credit balance or active token plan
+  const account =
+    access.who === "token" && access.key.userId ? await getAccount(access.key.userId) : null;
+  const userCredit = account ? getAccountCredit(account) : 0;
+  const hasPlanTokens =
+    account &&
+    account.limits.tokens !== null &&
+    account.limits.tokens - usedInPeriod(account).tokens > 0 &&
+    (!account.providers || account.providers.includes(providerId));
+
+  if (account && userCredit <= 0 && !hasPlanTokens) {
+    return NextResponse.json(
+      {
+        error: "Insufficient credit balance. Please deposit funds on your account to continue.",
+        creditBalance: userCredit,
+      },
+      { status: 402, headers: CORS_HEADERS }
+    );
+  }
+
   if (await isProviderPaused(providerId)) {
     return NextResponse.json(
       { error: pausedMessage(providerId) },
@@ -123,9 +145,20 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(data, { status: upstream.status, headers });
       }
 
-      const stream = relayStream(upstream.body, req.signal, (outcome) =>
-        recordLocalRun(providerId, model, outcome, caller)
-      );
+      const stream = relayStream(upstream.body, req.signal, async (outcome) => {
+        recordLocalRun(providerId, model, outcome, caller);
+        if (outcome.status === "ok" && account && userCredit > 0) {
+          const promptTokens = outcome.usage?.input_tokens ?? estimateTokens(prompt.length);
+          const completionTokens = outcome.usage?.output_tokens ?? estimateTokens(outcome.answerChars ?? 0);
+          await deductCreditForUsage(
+            account.userId,
+            providerId,
+            outcome.model || model,
+            promptTokens,
+            completionTokens
+          );
+        }
+      });
       return new NextResponse(withKeepAlive(stream), { status: upstream.status, headers: SSE_HEADERS });
     } catch (err) {
       recordLocalRun(providerId, model, { status: req.signal.aborted ? "stopped" : "error" }, caller);

@@ -22,6 +22,21 @@ export const PROVIDER_LABELS: Record<ChatProvider, string> = {
   mimo: "MiMo (web)",
 };
 
+// What customers see each provider as, on their account page: the model
+// behind it, not how the gateway reaches it.
+export const MODEL_NAMES: Record<ChatProvider, string> = {
+  "sea-lion": "SEA-LION",
+  cerebras: "Qwen 3.8",
+  groq: "GPT-OSS 120B",
+  claude: "Claude",
+  codex: "GPT-5 Codex",
+  gemini: "Gemini",
+  antigravity: "Gemini 3 Pro",
+  chatgpt: "ChatGPT",
+  grok: "Grok",
+  mimo: "MiMo",
+};
+
 // For the key and account forms' provider pickers.
 export const PROVIDER_OPTIONS = [...CLOUD_PROVIDERS, ...LOCAL_PROVIDERS].map((p) => ({
   id: p,

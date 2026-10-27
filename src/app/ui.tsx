@@ -220,7 +220,7 @@ export function UsagePanel({
                         m.model === "default" ? styles.dim : styles.mono
                       }
                     >
-                      {m.model === "default" ? "CLI default" : m.model}
+                      {m.model === "default" ? "Default model" : m.model}
                     </td>
                     <td className={styles.dim}>
                       {labels.get(m.provider) ?? m.provider}

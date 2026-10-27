@@ -83,7 +83,7 @@ export const STATUS_BADGES: Record<
 
 // CLIs that can't answer without their tools: a key needs agent access for
 // them (lib/auth.ts keyRule).
-const TOOL_ONLY = ["gemini", "antigravity"];
+export const TOOL_ONLY = ["gemini", "antigravity"];
 
 // Its fields, as typed.
 export type Draft = {
