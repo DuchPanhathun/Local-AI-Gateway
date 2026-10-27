@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { changeTokenFile, readTokenFile, usedInPeriod, type Account, type TokenFile } from "./api-tokens";
+import { checkOrderStatus, createCheckoutSession, isBarayConfigured } from "./baray";
 import { describeCode, issueCodeIn, RedeemError, redeemIn, sameOrFewer, type Grant } from "./redeem-codes";
 import { DEFAULT_PACKS, type TokenPack } from "./token-packs";
 
@@ -58,6 +59,7 @@ export type Pack = {
 
 export type OrderStatus = "created" | "pending" | "paid" | "cancelled";
 export type OrderType = "pack" | "deposit";
+export type PaymentGateway = "paypal" | "baray";
 
 export type PredefinedDeposit = {
   amountUSD: number;
@@ -74,7 +76,8 @@ export const PREDEFINED_DEPOSIT_AMOUNTS: PredefinedDeposit[] = [
 ];
 
 export type Order = {
-  id: string; // PayPal's
+  id: string; // PayPal's or Baray's
+  gateway?: PaymentGateway;
   type?: OrderType;
   packId: string;
   packName: string;
@@ -84,7 +87,7 @@ export type Order = {
   currency: string;
   userId: string;
   email: string;
-  status: OrderStatus; // "pending": PayPal took it, but the money hasn't cleared
+  status: OrderStatus; // "pending": PayPal/Baray took it, but the money hasn't cleared
   createdAt: string;
   paidAt: string | null;
   captureId: string | null;
@@ -349,7 +352,18 @@ function paypalConfig() {
 
 export function paymentsStatus() {
   const config = paypalConfig();
-  return { configured: Boolean(config), live: Boolean(config?.live), currency: CURRENCY };
+  const barayConfigured = isBarayConfigured();
+  return {
+    configured: Boolean(config) || barayConfigured,
+    live: Boolean(config?.live),
+    currency: CURRENCY,
+    paypal: { configured: Boolean(config), live: Boolean(config?.live) },
+    baray: { configured: barayConfigured },
+    gateways: {
+      paypal: Boolean(config),
+      baray: barayConfigured,
+    },
+  };
 }
 
 let accessToken: { value: string; until: number; clientId: string } | null = null;
@@ -416,9 +430,9 @@ const money = (cents: number) => (cents / 100).toFixed(2);
 export async function startOrder(
   user: { id: string; email: string },
   packId: string,
-  returnBase: string
+  returnBase: string,
+  gateway: PaymentGateway = "paypal"
 ): Promise<{ orderId: string; approveUrl: string }> {
-  if (!paypalConfig()) throw new ShopError(503, "Payments aren't set up yet.");
   const file = await readTokenFile();
   const shop = shopOf(file);
   const pack = shop.packs.find((p) => p.id === packId && p.active);
@@ -429,6 +443,45 @@ export async function startOrder(
   if (account.disabled) throw new ShopError(403, "Your account is turned off, so it can't buy packs.");
   const lose = wouldLose(account, pack.providers);
   if (lose) throw new ShopError(409, lose);
+
+  if (gateway === "baray") {
+    if (!isBarayConfigured()) throw new ShopError(503, "Baray payments aren't set up yet.");
+    const orderId = `baray-${randomUUID().replace(/-/g, "").slice(0, 20)}`;
+    const session = await createCheckoutSession({
+      amount: money(pack.priceCents),
+      currency: "USD",
+      orderId,
+      tracking: { userId: user.id, email: user.email, packId: pack.id },
+      orderDetails: { description: `${pack.name}: ${pack.tokens.toLocaleString("en")} tokens` },
+      customSuccessUrl: `${returnBase}/account?baray=return&orderId=${encodeURIComponent(orderId)}&order_id=${encodeURIComponent(orderId)}`,
+    }).catch((err) => {
+      throw new ShopError(502, `Failed to create Baray checkout: ${err instanceof Error ? err.message : String(err)}`);
+    });
+
+    await changeTokenFile((f) => {
+      shopOf(f).orders.push({
+        id: orderId,
+        gateway: "baray",
+        type: "pack",
+        packId: pack.id,
+        packName: pack.name,
+        grant: grantOf(pack),
+        priceCents: pack.priceCents,
+        currency: CURRENCY,
+        userId: user.id,
+        email: user.email,
+        status: "created",
+        createdAt: new Date().toISOString(),
+        paidAt: null,
+        captureId: session.intentId,
+        code: null,
+        applied: null,
+      });
+    });
+    return { orderId, approveUrl: session.checkoutUrl };
+  }
+
+  if (!paypalConfig()) throw new ShopError(503, "Payments aren't set up yet.");
 
   const { status, data } = await paypal("/v2/checkout/orders", {
     method: "POST",
@@ -463,6 +516,7 @@ export async function startOrder(
   await changeTokenFile((f) => {
     shopOf(f).orders.push({
       id: order.id,
+      gateway: "paypal",
       packId: pack.id,
       packName: pack.name,
       grant: grantOf(pack),
@@ -482,11 +536,12 @@ export async function startOrder(
 }
 
 // Starts depositing arbitrary or predefined credit for the signed-in user:
-// creates the PayPal order and returns the approveUrl.
+// creates the PayPal or Baray order and returns the approveUrl.
 export async function startDepositOrder(
   user: { id: string; email: string },
   amountCents: number,
-  returnBase: string
+  returnBase: string,
+  gateway: PaymentGateway = "paypal"
 ): Promise<{ orderId: string; approveUrl: string }> {
   if (
     typeof amountCents !== "number" ||
@@ -499,13 +554,53 @@ export async function startDepositOrder(
       "Deposit amount must be a whole number of cents between 100 ($1.00) and 100,000 ($1,000.00)."
     );
   }
-  if (!paypalConfig()) throw new ShopError(503, "Payments aren't set up yet.");
   const file = await readTokenFile();
   const account = file.accounts.find((a) => a.userId === user.id);
   if (!account) throw new ShopError(409, "Your account isn't ready yet: reload the page and try again.");
   if (account.disabled) throw new ShopError(403, "Your account is turned off, so it can't deposit credit.");
 
   const usdValue = money(amountCents);
+
+  if (gateway === "baray") {
+    if (!isBarayConfigured()) throw new ShopError(503, "Baray payments aren't set up yet.");
+    const orderId = `baray-${randomUUID().replace(/-/g, "").slice(0, 20)}`;
+    const session = await createCheckoutSession({
+      amount: usdValue,
+      currency: "USD",
+      orderId,
+      tracking: { userId: user.id, email: user.email },
+      orderDetails: { description: `Deposit $${usdValue} credit` },
+      customSuccessUrl: `${returnBase}/account?baray=return&orderId=${encodeURIComponent(orderId)}&order_id=${encodeURIComponent(orderId)}`,
+    }).catch((err) => {
+      throw new ShopError(502, `Failed to create Baray checkout: ${err instanceof Error ? err.message : String(err)}`);
+    });
+
+    await changeTokenFile((f) => {
+      shopOf(f).orders.push({
+        id: orderId,
+        gateway: "baray",
+        type: "deposit",
+        packId: "credit-deposit",
+        packName: `Deposit $${usdValue} credit`,
+        grant: { kind: "topup", plan: null, addTokens: null, addRequests: null, addDays: null },
+        priceCents: amountCents,
+        creditCents: amountCents,
+        currency: CURRENCY,
+        userId: user.id,
+        email: user.email,
+        status: "created",
+        createdAt: new Date().toISOString(),
+        paidAt: null,
+        captureId: session.intentId,
+        code: null,
+        applied: null,
+      });
+    });
+    return { orderId, approveUrl: session.checkoutUrl };
+  }
+
+  if (!paypalConfig()) throw new ShopError(503, "Payments aren't set up yet.");
+
   const { status, data } = await paypal("/v2/checkout/orders", {
     method: "POST",
     requestId: randomUUID(),
@@ -539,6 +634,7 @@ export async function startDepositOrder(
   await changeTokenFile((f) => {
     shopOf(f).orders.push({
       id: order.id,
+      gateway: "paypal",
       type: "deposit",
       packId: "credit-deposit",
       packName: `Deposit $${usdValue} credit`,
@@ -557,6 +653,14 @@ export async function startDepositOrder(
     });
   });
   return { orderId: order.id, approveUrl: approve };
+}
+
+export async function startBarayDepositOrder(
+  user: { id: string; email: string },
+  amountCents: number,
+  returnBase: string
+): Promise<{ orderId: string; approveUrl: string }> {
+  return startDepositOrder(user, amountCents, returnBase, "baray");
 }
 
 // Orders being finished right now: a reload or a second click waits for the
@@ -578,6 +682,77 @@ async function finish(user: { id: string }, orderId: string): Promise<Order> {
   const order = shopOf(file).orders.find((o) => o.id === orderId && o.userId === user.id);
   if (!order) throw new ShopError(404, "You have no order with that id.");
   if (order.status === "paid" || order.status === "cancelled") return order;
+
+  if (order.gateway === "baray") {
+    const check = await checkOrderStatus({
+      orderId: order.id,
+      intentId: order.captureId ?? undefined,
+      amount: money(order.priceCents),
+      currency: order.currency,
+    }).catch((err) => {
+      throw new ShopError(502, `Baray payment check failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+
+    if (!check.paid) {
+      if (check.status === "pending" || check.status === "no_attempts") {
+        throw new ShopError(402, "The payment hasn't been completed with Baray yet. Please finish the payment in your banking app.");
+      }
+      if (check.status === "not_found") {
+        throw new ShopError(404, "Payment session not found on Baray.");
+      }
+      throw new ShopError(402, `Baray payment not completed (${check.status}).`);
+    }
+
+    return changeTokenFile((f) => {
+      const o = shopOf(f).orders.find((x) => x.id === orderId)!;
+      if (o.status === "paid") return o;
+
+      if (o.type === "deposit" || o.packId === "credit-deposit") {
+        const amountUSD = o.priceCents / 100;
+        const account = f.accounts.find((a) => a.userId === o.userId);
+        if (account) {
+          const curr = account.creditBalance ?? account.balance ?? 0;
+          const next = Math.max(0, Number((curr + amountUSD).toFixed(6)));
+          const nextCents = Math.round(next * 100);
+          account.balance = next;
+          account.creditBalance = next;
+          account.creditBalanceCents = nextCents;
+          account.activatedAt ??= new Date().toISOString();
+
+          const tx = {
+            id: randomUUID().slice(0, 16),
+            userId: o.userId,
+            type: "deposit" as const,
+            amountCents: o.priceCents,
+            amountUSD,
+            balanceAfterCents: nextCents,
+            balanceAfterUSD: next,
+            description: `Baray deposit (${o.id}): +$${amountUSD.toFixed(2)}`,
+            orderId: o.id,
+            createdAt: new Date().toISOString(),
+          };
+          account.transactions = Array.isArray(account.transactions) ? account.transactions : [];
+          account.transactions.push(tx);
+        }
+        const applied = `Added $${amountUSD.toFixed(2)} to your credit balance via Baray.`;
+        Object.assign(o, { status: "paid", paidAt: new Date().toISOString(), code: null, applied });
+        return o;
+      }
+
+      const code = issueCodeIn(f, o.grant, `Baray order ${o.id} · ${o.email}`);
+      const account = f.accounts.find((a) => a.userId === o.userId);
+      let applied: string | null = null;
+      if (account && !wouldLose(account, o.grant.plan?.providers ?? null)) {
+        try {
+          applied = redeemIn(f, { id: o.userId, email: o.email }, code.code);
+        } catch (err) {
+          if (!(err instanceof RedeemError)) throw err;
+        }
+      }
+      Object.assign(o, { status: "paid", paidAt: new Date().toISOString(), code: code.code, applied });
+      return o;
+    });
+  }
 
   let { status, data } =
     order.status === "pending"
@@ -682,6 +857,7 @@ export async function ordersOf(userId: string) {
     .reverse()
     .map((o) => ({
       id: o.id,
+      gateway: o.gateway ?? "paypal",
       type: o.type ?? "pack",
       packName: o.packName,
       priceCents: o.priceCents,

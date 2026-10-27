@@ -54,6 +54,7 @@ export async function POST(req: NextRequest) {
   const who = await checkUser(req);
   if (!who.ok) return fail(who.status, who.error);
   const body = (await req.json().catch(() => ({}))) as {
+    gateway?: unknown;
     packId?: unknown;
     amountCents?: unknown;
     amountUSD?: unknown;
@@ -63,6 +64,14 @@ export async function POST(req: NextRequest) {
 
   try {
     await ensureAccount(who.user);
+
+    let gateway: "paypal" | "baray" = "paypal";
+    if (body.gateway !== undefined) {
+      if (body.gateway !== "paypal" && body.gateway !== "baray") {
+        return fail(400, "Invalid gateway. Supported gateways: paypal, baray");
+      }
+      gateway = body.gateway;
+    }
 
     // 1. Credit deposit flow
     let depositCents: number | null = null;
@@ -81,7 +90,7 @@ export async function POST(req: NextRequest) {
         return fail(400, "Deposit amount must be between $1.00 (100 cents) and $1,000.00 (100,000 cents).");
       }
       return NextResponse.json(
-        await startDepositOrder(who.user, depositCents, returnBase(req)),
+        await startDepositOrder(who.user, depositCents, returnBase(req), gateway),
         { headers: NO_STORE }
       );
     }
@@ -89,7 +98,7 @@ export async function POST(req: NextRequest) {
     // 2. Token pack flow
     if (typeof body.packId === "string" && body.packId.trim()) {
       return NextResponse.json(
-        await startOrder(who.user, body.packId.trim(), returnBase(req)),
+        await startOrder(who.user, body.packId.trim(), returnBase(req), gateway),
         { headers: NO_STORE }
       );
     }
@@ -115,6 +124,7 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json(
         {
           status: order.status,
+          gateway: order.gateway ?? "paypal",
           type: order.type ?? "pack",
           applied: order.applied,
           code: order.applied ? null : order.code,
@@ -127,7 +137,10 @@ export async function PATCH(req: NextRequest) {
     }
     if (body.action === "cancel") {
       const order = await cancelOrder(who.user, id);
-      return NextResponse.json({ status: order.status }, { headers: NO_STORE });
+      return NextResponse.json(
+        { status: order.status, gateway: order.gateway ?? "paypal" },
+        { headers: NO_STORE }
+      );
     }
     return fail(400, "`action` must be finish or cancel");
   } catch (err) {
