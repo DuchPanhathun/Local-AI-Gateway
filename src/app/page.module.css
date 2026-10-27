@@ -1217,25 +1217,14 @@
   border-top: 1px solid var(--border);
 }
 
-/* width: 100%, or the body's flex column shrinks it to fit its widest table. */
-.accountShell {
-  width: 100%;
-  max-width: 1040px;
-  margin: 0 auto;
-  padding: 24px 20px 3rem;
-}
-
-.accountHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 20px;
-}
-
-.accountHeader a {
-  text-decoration: none;
+/* The signed-in person, above Sign out in the account page's sidebar. */
+.navUser {
+  font-size: 0.76rem;
+  color: var(--text-dim);
+  padding: 0 10px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .planFigure {
@@ -1674,6 +1663,7 @@
   }
   .sidebarBrand,
   .navLabel,
+  .navUser,
   .themeSwitch {
     display: none;
   }

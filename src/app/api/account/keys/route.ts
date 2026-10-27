@@ -37,7 +37,8 @@ export async function POST(req: NextRequest) {
   const who = await checkUser(req);
   if (!who.ok) return fail(who.status, who.error);
   const account = await ensureAccount(who.user);
-  if (!account.activatedAt) return fail(403, "Your account hasn't been activated yet, so it can't have keys.");
+  // A waiting account can make keys; they work once it's activated.
+  if (account.disabled) return fail(403, "Your account is turned off, so it can't make keys.");
   const keys = await accountKeys(who.user.id);
   if (keys.length >= account.maxKeys) {
     return fail(403, `You can have up to ${account.maxKeys} keys. Delete one to make another.`);

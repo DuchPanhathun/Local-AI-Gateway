@@ -16,6 +16,7 @@ import {
   UsageCell,
   type KeyStatus,
 } from "../api-keys";
+import { Icon, type IconName } from "../icons";
 import { Logo } from "../logo";
 import styles from "../page.module.css";
 import { PROVIDER_OPTIONS } from "../providers";
@@ -92,6 +93,15 @@ type ShopData = {
 
 type Mode = "signin" | "signup" | "forgot" | "reset";
 
+type AccountView = "overview" | "keys" | "usage" | "buy";
+
+const VIEWS: { id: AccountView; label: string; icon: IconName; description: string }[] = [
+  { id: "overview", label: "Overview", icon: "dashboard", description: "Your plan, what's left on it, and codes." },
+  { id: "keys", label: "API keys", icon: "key", description: "Keys for your apps. They all share your plan." },
+  { id: "usage", label: "Usage", icon: "analytics", description: "What your keys have used, by day and model (UTC)." },
+  { id: "buy", label: "Buy tokens", icon: "cart", description: "Prepaid tokens at half the market price or less, paid with PayPal." },
+];
+
 const LABELS = new Map<string, string>(PROVIDER_OPTIONS.map((p) => [p.id, p.label]));
 const PERIOD_USED = { day: "today", month: "this month", total: "in total" };
 const REFRESH_MS = 30_000;
@@ -113,6 +123,7 @@ export function AccountDashboard() {
     undefined,
   );
   const [mode, setMode] = useState<Mode>("signin");
+  const [view, setView] = useState<AccountView>("overview");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -215,10 +226,12 @@ export function AccountDashboard() {
     window.history.replaceState(null, "", "/account");
     async function run() {
       if (outcome === "cancel") {
+        setView("buy");
         await call("PATCH", `/api/account/orders?id=${encodeURIComponent(orderId!)}`, { action: "cancel" }, setShopError);
         setShopNotice("You cancelled the payment: nothing was charged.");
         return;
       }
+      setView("buy");
       setShopNotice("Finishing your payment…");
       const json = await call(
         "PATCH",
@@ -567,389 +580,493 @@ export function AccountDashboard() {
   const base = data?.publicOrigin ?? origin;
   const today = new Date(loadedAt || 0).toISOString().slice(0, 10);
   const when = plan ? PERIOD_USED[plan.limits.period] : "";
+  const pending = plan?.status === "pending";
+  const current = VIEWS.find((v) => v.id === view) ?? VIEWS[0];
+
+  const redeemSection = (
+    <section className={styles.section}>
+      <div className={styles.sectionHeader}>
+        <span className={styles.sectionTitle}>Redeem a code</span>
+      </div>
+      <p className={styles.sectionDesc}>
+        {pending
+          ? "Have a code? It activates your account."
+          : "A plan code renews or changes your plan; a top-up code adds to it."}
+      </p>
+      <form onSubmit={redeemCode} className={styles.inlineForm}>
+        <input
+          value={codeText}
+          onChange={(e) => setCodeText(e.target.value)}
+          placeholder="XXXX-XXXX-XXXX"
+          className={`${styles.input} ${styles.mono}`}
+          autoComplete="off"
+          spellCheck={false}
+          maxLength={60}
+          aria-label="Code"
+        />
+        <button
+          type="submit"
+          className={styles.button}
+          disabled={busy !== null || !codeText.trim()}
+        >
+          {busy === "redeem" ? "Redeeming…" : "Redeem"}
+        </button>
+      </form>
+      {redeemError && <div className={styles.alert}>{redeemError}</div>}
+      {redeemed && (
+        <div className={styles.reveal} style={{ marginBottom: 0 }}>
+          <div className={styles.revealLabel} style={{ marginBottom: 0 }}>
+            {redeemed}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+
+  const overviewView = plan && data && (
+    <>
+      {pending && (
+        <section className={styles.section}>
+          <div className={styles.sectionHeader}>
+            <span className={styles.sectionTitle}>Activate your account</span>
+          </div>
+          <p className={styles.sectionDesc}>
+            Your account has no plan yet, so its keys don&apos;t work. Buy a
+            pack of tokens or redeem a code, and it&apos;s active at once (or
+            wait for the admin to set it up). You can make your API keys now.
+          </p>
+          <div className={styles.actionList}>
+            <button type="button" className={styles.actionRow} onClick={() => setView("buy")}>
+              <span className={styles.statIcon}>
+                <Icon name="cart" />
+              </span>
+              <span>
+                <span className={styles.actionTitle}>Buy tokens</span>
+                <span className={styles.actionDesc}>Half the market price or less, with PayPal</span>
+              </span>
+            </button>
+            <button type="button" className={styles.actionRow} onClick={() => setView("keys")}>
+              <span className={styles.statIcon}>
+                <Icon name="key" />
+              </span>
+              <span>
+                <span className={styles.actionTitle}>Make an API key</span>
+                <span className={styles.actionDesc}>It works once your account is active</span>
+              </span>
+            </button>
+          </div>
+        </section>
+      )}
+
+      <div className={styles.statGrid}>
+        <div className={styles.statCard}>
+          <div className={styles.statHead}>
+            <span className={styles.statLabel}>Status</span>
+            <span className={`${styles.badge} ${STATUS_BADGES[plan.status].className}`}>
+              {STATUS_BADGES[plan.status].label}
+            </span>
+          </div>
+          <div className={styles.statValue}>
+            {pending ? "No plan" : plan.expiresAt ? new Date(plan.expiresAt).toLocaleDateString() : "No end"}
+          </div>
+          <div className={styles.statSub}>
+            {pending ? "Buy tokens or redeem a code" : plan.expiresAt ? "When your plan ends" : "Your plan doesn't end"}
+          </div>
+        </div>
+        <div className={styles.statCard}>
+          <div className={styles.statHead}>
+            <span className={styles.statLabel}>Tokens left</span>
+            <span className={styles.statIcon}>
+              <Icon name="hash" />
+            </span>
+          </div>
+          <div className={styles.statValue}>
+            {pending ? "0" : plan.remaining.tokens === null ? "No limit" : formatCount(plan.remaining.tokens)}
+          </div>
+          <div className={styles.statSub}>
+            {formatCount(plan.used.tokens)} used {when}
+          </div>
+        </div>
+        <div className={styles.statCard}>
+          <div className={styles.statHead}>
+            <span className={styles.statLabel}>Requests</span>
+            <span className={styles.statIcon}>
+              <Icon name="activity" />
+            </span>
+          </div>
+          <div className={styles.statValue}>{formatCount(plan.used.requests - plan.used.errors)}</div>
+          <div className={styles.statSub}>
+            {plan.limits.requests !== null
+              ? `of ${formatCount(plan.limits.requests)} ${when}`
+              : `${when}${plan.used.errors ? ` · ${plan.used.errors} failed` : ""}`}
+          </div>
+        </div>
+        <div className={styles.statCard}>
+          <div className={styles.statHead}>
+            <span className={styles.statLabel}>API keys</span>
+            <span className={styles.statIcon}>
+              <Icon name="key" />
+            </span>
+          </div>
+          <div className={styles.statValue}>
+            {data.keys.length} <span className={styles.dim}>of {plan.maxKeys}</span>
+          </div>
+          <div className={styles.statSub}>They all share your plan</div>
+        </div>
+      </div>
+
+      {!pending && (
+        <section className={styles.section}>
+          <div className={styles.sectionHeader}>
+            <span className={styles.sectionTitle}>Your plan</span>
+          </div>
+          <p className={styles.sectionDesc}>
+            {limitsText(plan)}.{" "}
+            {plan.providers
+              ? `Providers: ${plan.providers.map((p) => LABELS.get(p) ?? p).join(", ")}.`
+              : "Every provider."}
+            {plan.resetsAt &&
+              ` Your ${plan.limits.period === "day" ? "daily" : "monthly"} limits start over on ${new Date(plan.resetsAt).toLocaleString()}.`}
+            {plan.status === "disabled" && " The admin has turned your account off for now."}
+          </p>
+          <div className={styles.twoCol}>
+            <div className={styles.planFigure}>
+              <span className={styles.label}>Tokens {when}</span>
+              <UsageCell
+                used={plan.used.tokens}
+                limit={plan.limits.tokens}
+                note={plan.remaining.tokens !== null ? `${plan.remaining.tokens.toLocaleString()} left` : "no limit"}
+              />
+            </div>
+            <div className={styles.planFigure}>
+              <span className={styles.label}>Requests {when}</span>
+              <UsageCell
+                used={plan.used.requests - plan.used.errors}
+                limit={plan.limits.requests}
+                note={plan.remaining.requests !== null ? `${plan.remaining.requests.toLocaleString()} left` : "no limit"}
+              />
+            </div>
+          </div>
+        </section>
+      )}
+
+      {redeemSection}
+    </>
+  );
+
+  const keysView = plan && data && (
+    <>
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <span className={styles.sectionTitle}>Your keys</span>
+          <span className={styles.badge}>
+            {data.keys.length} of {plan.maxKeys}
+          </span>
+        </div>
+        <p className={styles.sectionDesc}>
+          Send one in the <code>Authorization: Bearer</code> header. Your keys
+          share your plan. Keep them secret: anyone with one can use what&apos;s
+          left on it.
+          {pending && " Your account isn't active yet, so keys you make now start working once it is."}
+        </p>
+
+        {data.keys.length < plan.maxKeys ? (
+          <form onSubmit={createKey} className={styles.inlineForm}>
+            <input
+              value={keyName}
+              onChange={(e) => setKeyName(e.target.value)}
+              placeholder="Name, e.g. my-bot"
+              className={styles.input}
+              maxLength={100}
+            />
+            <button type="submit" className={styles.button} disabled={busy !== null}>
+              {busy === "create" ? "Creating…" : "Create key"}
+            </button>
+          </form>
+        ) : (
+          <p className={styles.fieldHint} style={{ marginBottom: 16 }}>
+            You have as many keys as your plan allows. Delete one to make another.
+          </p>
+        )}
+
+        {revealed && (
+          <div className={styles.reveal}>
+            <div className={styles.revealLabel}>
+              Your key “{revealed.name}”. Copy it now — it won&apos;t be shown again.
+            </div>
+            <div className={styles.revealRow}>
+              <span className={styles.revealValue}>{revealed.secret}</span>
+              <CopyButton value={revealed.secret} />
+              <CopyButton label="Copy example" value={exampleCall(base, revealed.secret)} />
+              <button type="button" className={styles.buttonGhost} onClick={() => setRevealed(null)}>
+                Done
+              </button>
+            </div>
+          </div>
+        )}
+
+        {data.keys.length > 0 ? (
+          <div className={styles.tableWrap}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Made</th>
+                  <th>Last used</th>
+                  <th>Tokens used</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {data.keys.map((k) => (
+                  <tr key={k.id}>
+                    <td>
+                      <div className={styles.strong}>
+                        {k.name}
+                        {k.disabled && (
+                          <span className={styles.badge} style={{ marginLeft: 8 }}>
+                            Off
+                          </span>
+                        )}
+                      </div>
+                      <div className={`${styles.mono} ${styles.cellNote}`}>{k.hint}</div>
+                    </td>
+                    <td className={styles.dim}>{new Date(k.createdAt).toLocaleDateString()}</td>
+                    <td className={styles.dim}>{ago(k.lastUsedAt, loadedAt)}</td>
+                    <td>{formatCount(k.total.tokens)}</td>
+                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                      <button
+                        type="button"
+                        className={styles.buttonGhost}
+                        disabled={busy !== null}
+                        onClick={() => rotateKey(k)}
+                      >
+                        New secret
+                      </button>{" "}
+                      <button
+                        type="button"
+                        className={styles.buttonDanger}
+                        disabled={busy !== null}
+                        onClick={() => deleteKey(k)}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className={styles.empty}>No keys yet. Name one above and create it.</p>
+        )}
+      </section>
+
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <span className={styles.sectionTitle}>Calling the API</span>
+        </div>
+        <p className={styles.sectionDesc}>
+          The address is <code>{base}</code>. Every endpoint, model and option is
+          in the <Link href="/documents" className={styles.inlineLink}>docs</Link>.
+          Check what a key has left with <code>GET /api/me</code>.
+        </p>
+        <div className={styles.codeBlock}>
+          <div className={styles.codeBlockBody}>
+            <pre className={styles.pre}>{exampleCall(base, "$YOUR_KEY")}</pre>
+            <CopyButton value={exampleCall(base, "$YOUR_KEY")} />
+          </div>
+        </div>
+      </section>
+    </>
+  );
+
+  const usageView = data && (
+    <section className={styles.section}>
+      <UsagePanel
+        usage={data.usage.month === month ? data.usage : null}
+        month={month}
+        months={data.months}
+        onMonth={setMonth}
+        labels={LABELS}
+        today={today}
+      />
+    </section>
+  );
+
+  const buyView = plan && (
+    <section className={styles.section}>
+      <div className={styles.sectionHeader}>
+        <span className={styles.sectionTitle}>Packs</span>
+        {shop?.payments.configured && !shop.payments.live && (
+          <span className={`${styles.badge} ${styles.badgeWarning}`}>Test payments</span>
+        )}
+      </div>
+      <p className={styles.sectionDesc}>
+        Prepaid tokens, paid with PayPal and added to your plan at once.
+        Buying another pack for the same providers adds to what you have left.
+      </p>
+      {shopNotice && (
+        <div className={styles.reveal}>
+          <div className={styles.revealLabel} style={{ marginBottom: 0 }}>
+            {shopNotice}
+          </div>
+        </div>
+      )}
+      {shopError && (
+        <div className={styles.alert} style={{ marginBottom: 16 }}>
+          {shopError}
+        </div>
+      )}
+      {!shop ? (
+        <p className={styles.empty}>Loading…</p>
+      ) : shop.packs.length > 0 ? (
+        <div className={styles.packGrid}>
+          {shop.packs.map((p) => (
+            <div key={p.id} className={styles.packCard}>
+              <div className={styles.strong}>{p.name}</div>
+              {p.description && <div className={styles.cellNote}>{p.description}</div>}
+              <div className={styles.packPrice}>{usd(p.priceCents)}</div>
+              <div className={styles.packFacts}>
+                {formatCount(p.tokens)} tokens ·{" "}
+                {p.providers ? p.providers.map((id) => LABELS.get(id) ?? id).join(", ") : "every provider"}
+                {p.days ? ` · ${p.days} days` : ""}
+              </div>
+              {p.pricing.marketCents !== null && (
+                <div className={styles.cellNote}>
+                  <s>{usd(Math.round(p.pricing.marketCents))}</s> at market price · {p.pricing.savingPercent}% less
+                </div>
+              )}
+              <div className={styles.packBuy}>
+                <button
+                  type="button"
+                  className={`${styles.button} ${styles.buttonFull}`}
+                  disabled={busy !== null || !shop.payments.configured || plan.status === "disabled"}
+                  onClick={() => buy(p)}
+                >
+                  {busy === p.id ? "Opening PayPal…" : "Buy with PayPal"}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className={styles.empty}>No packs are on sale yet. Check back soon, or redeem a code on the Overview page.</p>
+      )}
+      {shop && !shop.payments.configured && shop.packs.length > 0 && (
+        <p className={styles.fieldHint} style={{ marginTop: 10 }}>
+          Payments aren&apos;t open yet. Check back soon.
+        </p>
+      )}
+      {shop && shop.orders.length > 0 && (
+        <>
+          <div className={styles.sectionHeader} style={{ marginTop: 20 }}>
+            <span className={styles.sectionTitle}>Your purchases</span>
+          </div>
+          <div className={styles.tableWrap} style={{ marginTop: 8 }}>
+            <table className={styles.table}>
+              <tbody>
+                {shop.orders.map((o) => (
+                  <tr key={o.id}>
+                    <td className={styles.dim}>{new Date(o.paidAt ?? o.createdAt).toLocaleDateString()}</td>
+                    <td>{o.packName}</td>
+                    <td>{usd(o.priceCents)}</td>
+                    <td>
+                      {o.status === "pending" ? (
+                        <button type="button" className={styles.buttonGhost} disabled={busy !== null} onClick={() => checkAgain(o)}>
+                          Clearing: check again
+                        </button>
+                      ) : o.applied ? (
+                        <span className={styles.dim}>Added to your plan</span>
+                      ) : (
+                        <span>
+                          Code to redeem: <span className={styles.mono}>{o.code}</span>
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </section>
+  );
 
   return (
-    <div className={styles.accountShell}>
-      <header className={styles.accountHeader}>
-        <div className={styles.brand}>
+    <div className={styles.appShell}>
+      <aside className={styles.sidebar}>
+        <div className={`${styles.brand} ${styles.sidebarBrand}`}>
           <Logo className={styles.brandMark} />
           <span className={styles.brandText}>
             <span className={styles.brandName}>Thun Murex</span>
-            <span className={styles.brandSub}>{session.user.email}</span>
+            <span className={styles.brandSub}>Your account</span>
           </span>
         </div>
-        <nav className={styles.headerActions}>
+
+        <div className={styles.navLabel}>Account</div>
+        <nav className={styles.nav}>
+          {VIEWS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`${styles.navItem} ${view === item.id ? styles.navItemActive : ""}`}
+              onClick={() => setView(item.id)}
+              aria-current={view === item.id ? "page" : undefined}
+            >
+              <Icon name={item.icon} className={styles.navIcon} />
+              {item.label}
+            </button>
+          ))}
+          <Link href="/documents" className={styles.navItem}>
+            <Icon name="book" className={styles.navIcon} />
+            Documents
+          </Link>
           {data?.user.admin && (
-            <Link href="/" className={styles.buttonGhost}>
+            <Link href="/" className={styles.navItem}>
+              <Icon name="manage" className={styles.navIcon} />
               Admin console
             </Link>
           )}
-          <Link href="/documents" className={styles.buttonGhost}>
-            Docs
-          </Link>
-          <button type="button" className={styles.buttonGhost} onClick={signOut}>
+        </nav>
+
+        <div className={styles.navFooter}>
+          <div className={styles.navUser} title={session.user.email}>
+            {session.user.email}
+          </div>
+          <button type="button" className={styles.navItem} onClick={signOut}>
+            <Icon name="logout" className={styles.navIcon} />
             Sign out
           </button>
-        </nav>
-      </header>
-
-      {error && (
-        <div className={styles.alert} style={{ marginBottom: 16 }}>
-          {error}
         </div>
-      )}
+      </aside>
 
-      {!data || !plan ? (
-        <p className={styles.empty}>Loading…</p>
-      ) : (
-        <>
-          <section className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <span className={styles.sectionTitle}>Your plan</span>
-              <span
-                className={`${styles.badge} ${STATUS_BADGES[plan.status].className}`}
-              >
-                {STATUS_BADGES[plan.status].label}
-              </span>
-            </div>
-            {plan.status === "pending" ? (
-              <p className={styles.sectionDesc}>
-                Your account is waiting to be activated. Redeem a code below,
-                or wait for the admin to set what it can use; then you can
-                make API keys here.
-              </p>
-            ) : (
-              <>
-                <p className={styles.sectionDesc}>
-                  {limitsText(plan)}.{" "}
-                  {plan.providers
-                    ? `Providers: ${plan.providers.map((p) => LABELS.get(p) ?? p).join(", ")}.`
-                    : "Every provider."}
-                  {plan.resetsAt &&
-                    ` Your ${plan.limits.period === "day" ? "daily" : "monthly"} limits start over on ${new Date(plan.resetsAt).toLocaleString()}.`}
-                  {plan.status === "disabled" &&
-                    " The admin has turned your account off for now."}
-                </p>
-                <div className={styles.twoCol}>
-                  <div className={styles.planFigure}>
-                    <span className={styles.label}>Tokens {when}</span>
-                    <UsageCell
-                      used={plan.used.tokens}
-                      limit={plan.limits.tokens}
-                      note={
-                        plan.remaining.tokens !== null
-                          ? `${plan.remaining.tokens.toLocaleString()} left`
-                          : "no limit"
-                      }
-                    />
-                  </div>
-                  <div className={styles.planFigure}>
-                    <span className={styles.label}>Requests {when}</span>
-                    <UsageCell
-                      used={plan.used.requests - plan.used.errors}
-                      limit={plan.limits.requests}
-                      note={
-                        plan.remaining.requests !== null
-                          ? `${plan.remaining.requests.toLocaleString()} left`
-                          : "no limit"
-                      }
-                    />
-                  </div>
-                </div>
-              </>
-            )}
-          </section>
+      <main className={styles.content}>
+        <div className={styles.pageHeader}>
+          <div>
+            <h1 className={styles.pageTitle}>{current.label}</h1>
+            <p className={styles.pageDesc}>{current.description}</p>
+          </div>
+        </div>
 
-          <section className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <span className={styles.sectionTitle}>Redeem a code</span>
-            </div>
-            <p className={styles.sectionDesc}>
-              {plan.status === "pending"
-                ? "Have a code? It activates your account."
-                : "A plan code renews or changes your plan; a top-up code adds to it."}
-            </p>
-            <form onSubmit={redeemCode} className={styles.inlineForm}>
-              <input
-                value={codeText}
-                onChange={(e) => setCodeText(e.target.value)}
-                placeholder="XXXX-XXXX-XXXX"
-                className={`${styles.input} ${styles.mono}`}
-                autoComplete="off"
-                spellCheck={false}
-                maxLength={60}
-                aria-label="Code"
-              />
-              <button
-                type="submit"
-                className={styles.button}
-                disabled={busy !== null || !codeText.trim()}
-              >
-                {busy === "redeem" ? "Redeeming…" : "Redeem"}
-              </button>
-            </form>
-            {redeemError && <div className={styles.alert}>{redeemError}</div>}
-            {redeemed && (
-              <div className={styles.reveal} style={{ marginBottom: 0 }}>
-                <div className={styles.revealLabel} style={{ marginBottom: 0 }}>
-                  {redeemed}
-                </div>
-              </div>
-            )}
-          </section>
+        {error && (
+          <div className={styles.alert} style={{ marginBottom: 16 }}>
+            {error}
+          </div>
+        )}
 
-          {shop && (shop.packs.length > 0 || shop.orders.length > 0 || shopNotice || shopError) && (
-            <section className={styles.section}>
-              <div className={styles.sectionHeader}>
-                <span className={styles.sectionTitle}>Buy tokens</span>
-                {shop.payments.configured && !shop.payments.live && (
-                  <span className={`${styles.badge} ${styles.badgeWarning}`}>Test payments</span>
-                )}
-              </div>
-              <p className={styles.sectionDesc}>
-                Prepaid tokens at half the market price or less, paid with
-                PayPal and added to your plan at once. Buying another pack adds
-                to what you have left.
-              </p>
-              {shopNotice && (
-                <div className={styles.reveal}>
-                  <div className={styles.revealLabel} style={{ marginBottom: 0 }}>
-                    {shopNotice}
-                  </div>
-                </div>
-              )}
-              {shopError && (
-                <div className={styles.alert} style={{ marginBottom: 16 }}>
-                  {shopError}
-                </div>
-              )}
-              {shop.packs.length > 0 && (
-                <div className={styles.packGrid}>
-                  {shop.packs.map((p) => (
-                    <div key={p.id} className={styles.packCard}>
-                      <div className={styles.strong}>{p.name}</div>
-                      {p.description && <div className={styles.cellNote}>{p.description}</div>}
-                      <div className={styles.packPrice}>{usd(p.priceCents)}</div>
-                      <div className={styles.packFacts}>
-                        {formatCount(p.tokens)} tokens ·{" "}
-                        {p.providers ? p.providers.map((id) => LABELS.get(id) ?? id).join(", ") : "every provider"}
-                        {p.days ? ` · ${p.days} days` : ""}
-                      </div>
-                      {p.pricing.marketCents !== null && (
-                        <div className={styles.cellNote}>
-                          <s>{usd(Math.round(p.pricing.marketCents))}</s> at market price ·{" "}
-                          {p.pricing.savingPercent}% less
-                        </div>
-                      )}
-                      <div className={styles.packBuy}>
-                        <button
-                          type="button"
-                          className={`${styles.button} ${styles.buttonFull}`}
-                          disabled={busy !== null || !shop.payments.configured || plan.status === "disabled"}
-                          onClick={() => buy(p)}
-                        >
-                          {busy === p.id ? "Opening PayPal…" : "Buy with PayPal"}
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {!shop.payments.configured && shop.packs.length > 0 && (
-                <p className={styles.fieldHint} style={{ marginTop: 10 }}>
-                  Payments aren&apos;t open yet. Check back soon.
-                </p>
-              )}
-              {shop.orders.length > 0 && (
-                <>
-                  <div className={styles.sectionHeader} style={{ marginTop: 20 }}>
-                    <span className={styles.sectionTitle}>Your purchases</span>
-                  </div>
-                  <div className={styles.tableWrap} style={{ marginTop: 8 }}>
-                    <table className={styles.table}>
-                      <tbody>
-                        {shop.orders.map((o) => (
-                          <tr key={o.id}>
-                            <td className={styles.dim}>{new Date(o.paidAt ?? o.createdAt).toLocaleDateString()}</td>
-                            <td>{o.packName}</td>
-                            <td>{usd(o.priceCents)}</td>
-                            <td>
-                              {o.status === "pending" ? (
-                                <button type="button" className={styles.buttonGhost} disabled={busy !== null} onClick={() => checkAgain(o)}>
-                                  Clearing: check again
-                                </button>
-                              ) : o.applied ? (
-                                <span className={styles.dim}>Added to your plan</span>
-                              ) : (
-                                <span>
-                                  Code to redeem: <span className={styles.mono}>{o.code}</span>
-                                </span>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              )}
-            </section>
-          )}
-
-          <section className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <span className={styles.sectionTitle}>API keys</span>
-              <span className={styles.badge}>
-                {data.keys.length} of {plan.maxKeys}
-              </span>
-            </div>
-            <p className={styles.sectionDesc}>
-              Send one in the <code>Authorization: Bearer</code> header. Your
-              keys share your plan. Keep them secret: anyone with one can use
-              what&apos;s left on it.
-            </p>
-
-            {plan.status !== "pending" && data.keys.length < plan.maxKeys && (
-              <form onSubmit={createKey} className={styles.inlineForm}>
-                <input
-                  value={keyName}
-                  onChange={(e) => setKeyName(e.target.value)}
-                  placeholder="Name, e.g. my-bot"
-                  className={styles.input}
-                  maxLength={100}
-                />
-                <button
-                  type="submit"
-                  className={styles.button}
-                  disabled={busy !== null}
-                >
-                  {busy === "create" ? "Creating…" : "Create key"}
-                </button>
-              </form>
-            )}
-
-            {revealed && (
-              <div className={styles.reveal}>
-                <div className={styles.revealLabel}>
-                  Your key “{revealed.name}”. Copy it now — it won&apos;t be
-                  shown again.
-                </div>
-                <div className={styles.revealRow}>
-                  <span className={styles.revealValue}>{revealed.secret}</span>
-                  <CopyButton value={revealed.secret} />
-                  <CopyButton
-                    label="Copy example"
-                    value={exampleCall(base, revealed.secret)}
-                  />
-                  <button
-                    type="button"
-                    className={styles.buttonGhost}
-                    onClick={() => setRevealed(null)}
-                  >
-                    Done
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {data.keys.length > 0 ? (
-              <div className={styles.tableWrap}>
-                <table className={styles.table}>
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Made</th>
-                      <th>Last used</th>
-                      <th>Tokens used</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.keys.map((k) => (
-                      <tr key={k.id}>
-                        <td>
-                          <div className={styles.strong}>
-                            {k.name}
-                            {k.disabled && (
-                              <span className={styles.badge} style={{ marginLeft: 8 }}>
-                                Off
-                              </span>
-                            )}
-                          </div>
-                          <div className={`${styles.mono} ${styles.cellNote}`}>
-                            {k.hint}
-                          </div>
-                        </td>
-                        <td className={styles.dim}>
-                          {new Date(k.createdAt).toLocaleDateString()}
-                        </td>
-                        <td className={styles.dim}>
-                          {ago(k.lastUsedAt, loadedAt)}
-                        </td>
-                        <td>{formatCount(k.total.tokens)}</td>
-                        <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                          <button
-                            type="button"
-                            className={styles.buttonGhost}
-                            disabled={busy !== null}
-                            onClick={() => rotateKey(k)}
-                          >
-                            New secret
-                          </button>{" "}
-                          <button
-                            type="button"
-                            className={styles.buttonDanger}
-                            disabled={busy !== null}
-                            onClick={() => deleteKey(k)}
-                          >
-                            Delete
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              plan.status !== "pending" && (
-                <p className={styles.empty}>No keys yet.</p>
-              )
-            )}
-          </section>
-
-          {plan.status !== "pending" && (
-            <section className={styles.section}>
-              <UsagePanel
-                usage={data.usage.month === month ? data.usage : null}
-                month={month}
-                months={data.months}
-                onMonth={setMonth}
-                labels={LABELS}
-                today={today}
-              />
-            </section>
-          )}
-
-          <section className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <span className={styles.sectionTitle}>Calling the API</span>
-            </div>
-            <p className={styles.sectionDesc}>
-              The address is <code>{base}</code>. Every endpoint, model and
-              option is in the <Link href="/documents" className={styles.inlineLink}>docs</Link>.
-              Check what a key has left with <code>GET /api/me</code>.
-            </p>
-            <div className={styles.codeBlock}>
-              <div className={styles.codeBlockBody}>
-                <pre className={styles.pre}>
-                  {exampleCall(base, "$YOUR_KEY")}
-                </pre>
-                <CopyButton value={exampleCall(base, "$YOUR_KEY")} />
-              </div>
-            </div>
-          </section>
-        </>
-      )}
+        {!data || !plan ? (
+          <p className={styles.empty}>Loading…</p>
+        ) : (
+          <>
+            {view === "overview" && overviewView}
+            {view === "keys" && keysView}
+            {view === "usage" && usageView}
+            {view === "buy" && buyView}
+          </>
+        )}
+      </main>
     </div>
   );
 }

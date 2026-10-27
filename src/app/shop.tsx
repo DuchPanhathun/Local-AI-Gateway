@@ -269,11 +269,12 @@ export function Shop({ providers }: { providers: ProviderOption[] }) {
         <div className={styles.sectionHeader}>
           <span className={styles.sectionTitle}>Packs</span>
           <span className={styles.headerActions}>
-            {data && (
+            {/* Only when payments aren't real yet. */}
+            {data && !data.payments.live && (
               <span
-                className={`${styles.badge} ${data.payments.configured ? (data.payments.live ? styles.badgeSuccess : styles.badgeWarning) : styles.badgeDanger}`}
+                className={`${styles.badge} ${data.payments.configured ? styles.badgeWarning : styles.badgeDanger}`}
               >
-                {data.payments.configured ? (data.payments.live ? "PayPal: live" : "PayPal: sandbox") : "PayPal: not set up"}
+                {data.payments.configured ? "PayPal: sandbox" : "PayPal: not set up"}
               </span>
             )}
             <button
