@@ -1,8 +1,40 @@
 "use client";
 
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
+import Link from "next/link";
 import { getThemePref, setThemePref, subscribeTheme, type ThemePref } from "../theme";
 import styles from "./docs.module.css";
+
+// ---------------------------------------------------------------------------
+// Back to the visitor's own dashboard: the console for an admin signed in
+// to it, else their account page (which asks them to sign in if they
+// aren't). Most people reading the docs have an account, not the console.
+// ---------------------------------------------------------------------------
+
+export function HomeLink({ className, footer = false }: { className?: string; footer?: boolean }) {
+  const [admin, setAdmin] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/session", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((data: { signedIn?: boolean }) => {
+        if (!cancelled) setAdmin(Boolean(data.signedIn));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return admin ? (
+    <Link href="/" className={className}>
+      {footer ? "Back to the console" : "Console →"}
+    </Link>
+  ) : (
+    <Link href="/account" className={className}>
+      {footer ? "Back to your account" : "Your account →"}
+    </Link>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // The gateway's own address, for the examples. The server doesn't know which

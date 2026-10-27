@@ -458,6 +458,9 @@ async function streamChat(
 // server did, instead of the sign-in screen flashing up.
 const SESSION_EVENT = "ai-thun-session-change";
 let signedInNow: boolean | undefined;
+// Someone signed in on /account in this browser who isn't an admin: their
+// email, so the sign-in page can send them back to their own dashboard.
+let customerNow: string | null = null;
 
 function subscribeSession(callback: () => void) {
   window.addEventListener(SESSION_EVENT, callback);
@@ -466,6 +469,14 @@ function subscribeSession(callback: () => void) {
 
 function getSignedIn(): boolean | undefined {
   return signedInNow;
+}
+
+function getCustomer(): string | null {
+  return customerNow;
+}
+
+function forgetCustomer() {
+  customerNow = null;
 }
 
 function setSignedIn(value: boolean) {
@@ -495,8 +506,11 @@ async function checkSession() {
 // /account, say) gets the console without signing in again.
 async function adminFromAccount(): Promise<boolean> {
   const session = (await supabaseBrowser()?.auth.getSession())?.data.session;
+  customerNow = null;
   if (!session) return false;
-  return (await consoleSignIn({ accessToken: session.access_token })).ok;
+  const result = await consoleSignIn({ accessToken: session.access_token });
+  if (result.account) customerNow = session.user.email ?? "an account";
+  return result.ok;
 }
 
 // The sign-in cookie, for the owner key or an admin's account.
@@ -543,6 +557,7 @@ export default function Dashboard() {
     getSignedIn,
     () => undefined,
   );
+  const customer = useSyncExternalStore(subscribeSession, getCustomer, () => null);
   useEffect(() => {
     void checkSession();
   }, []);
@@ -917,6 +932,7 @@ export default function Dashboard() {
     abortRef.current?.abort();
     void fetch("/api/session", { method: "DELETE" }).catch(() => {});
     void supabaseBrowser()?.auth.signOut();
+    forgetCustomer();
     setSignedIn(false);
     setKeys(null);
     setLocalUsage(null);
@@ -1016,6 +1032,17 @@ export default function Dashboard() {
           <p className={styles.subtitle}>
             Sign in to manage providers, keys, users and usage.
           </p>
+          {customer && (
+            <div className={styles.notice} style={{ marginBottom: 16 }}>
+              <span>
+                You&apos;re signed in as {customer}. This page is for admins;
+                your dashboard is your account page.
+              </span>
+              <Link href="/account" className={styles.inlineLink}>
+                Go to your account →
+              </Link>
+            </div>
+          )}
           {ACCOUNTS_ON && (
             <form onSubmit={signInWithAccount} className={styles.authForm}>
               <div className={styles.field}>

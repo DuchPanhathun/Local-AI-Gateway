@@ -111,6 +111,15 @@ const CONFIGURED = Boolean(
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
 );
 
+// Supabase's sign-in messages, in plainer words where it helps.
+function authMessage(message: string): string {
+  if (/not confirmed/i.test(message)) return "Confirm your email address first: open the link we sent you.";
+  if (/rate limit/i.test(message)) {
+    return "Too many emails have gone out in the last hour, so we can't send another yet. Try again in an hour.";
+  }
+  return message;
+}
+
 function exampleCall(base: string, key: string): string {
   return `curl ${base}/api/chat \\
   -H "Authorization: Bearer ${key}" \\
@@ -284,11 +293,7 @@ export function AccountDashboard() {
       if (mode === "signin") {
         const { error } = await sb.auth.signInWithPassword({ email, password });
         if (error) {
-          setError(
-            /not confirmed/i.test(error.message)
-              ? "Confirm your email address first: open the link we sent you."
-              : error.message,
-          );
+          setError(authMessage(error.message));
           return;
         }
         setPassword("");
@@ -299,7 +304,7 @@ export function AccountDashboard() {
           options: { emailRedirectTo: `${origin}/account` },
         });
         if (error) {
-          setError(error.message);
+          setError(authMessage(error.message));
           return;
         }
         setPassword("");
@@ -314,7 +319,7 @@ export function AccountDashboard() {
           redirectTo: `${origin}/account`,
         });
         if (error) {
-          setError(error.message);
+          setError(authMessage(error.message));
           return;
         }
         setNotice("If there's an account with that email, a link to reset its password is on its way.");
@@ -322,7 +327,7 @@ export function AccountDashboard() {
       } else {
         const { error } = await sb.auth.updateUser({ password });
         if (error) {
-          setError(error.message);
+          setError(authMessage(error.message));
           return;
         }
         setPassword("");
@@ -476,7 +481,7 @@ export function AccountDashboard() {
   if (!session || mode === "reset") {
     const titles: Record<Mode, string> = {
       signin: "Sign in to your account to see your API keys and what you've used.",
-      signup: "Make an account. Once the admin activates it, you can make API keys here.",
+      signup: "Make an account to get API keys, buy tokens and see what you've used.",
       forgot: "Type your email address, and we'll send a link to reset your password.",
       reset: "Choose a new password.",
     };

@@ -3,7 +3,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { defaultModel } from "@/lib/ai-providers";
 import { Logo } from "../logo";
-import { CodeBlock, CodeTabs, DocsNav, ThemeToggle, type NavGroup } from "./docs-client";
+import { CodeBlock, CodeTabs, DocsNav, HomeLink, ThemeToggle, type NavGroup } from "./docs-client";
 import styles from "./docs.module.css";
 
 export const metadata: Metadata = {
@@ -618,9 +618,7 @@ export default function DocumentsPage() {
           <span className={styles.brandTag}>Docs</span>
         </Link>
         <div className={styles.topActions}>
-          <Link href="/" className={styles.topLink}>
-            Console →
-          </Link>
+          <HomeLink className={styles.topLink} />
           <ThemeToggle />
         </div>
       </header>
@@ -1314,7 +1312,7 @@ export default function DocumentsPage() {
 
           <footer className={styles.footer}>
             <span>Thun Murex · self-hosted on thun-latitude-7280</span>
-            <Link href="/">Back to the console</Link>
+            <HomeLink footer />
           </footer>
         </main>
       </div>
