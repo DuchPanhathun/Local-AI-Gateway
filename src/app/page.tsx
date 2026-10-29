@@ -182,6 +182,23 @@ type ChatMessage = {
   isError?: boolean;
 };
 
+// The Playground's history (/api/history): saved on the server, so a chat
+// can be picked up later from any browser.
+type SavedChatSummary = {
+  id: string;
+  title: string;
+  provider: string;
+  model: string;
+  updatedAt: string;
+  turns: number;
+};
+
+type SavedChat = SavedChatSummary & {
+  sessionId: string | null;
+  workdir: string;
+  messages: ChatMessage[];
+};
+
 type View = "dashboard" | "playground" | "api-keys" | "users" | "codes" | "shop" | "analytics" | "manage";
 type PlaygroundMode = "chat" | SpeechMode;
 
@@ -379,6 +396,22 @@ function historyForApi(messages: ChatMessage[]) {
       (m, i) => !failed(m) && !(m.role === "user" && failed(messages[i + 1])),
     )
     .map(({ role, content }) => ({ role, content }));
+}
+
+// A new chat's id in the history. randomUUID needs HTTPS or localhost.
+function newChatId(): string {
+  return (
+    crypto.randomUUID?.() ??
+    `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  );
+}
+
+// When a saved chat was last used: the time today, else the date.
+function savedAtLabel(iso: string): string {
+  const at = new Date(iso);
+  return at.toDateString() === new Date().toDateString()
+    ? at.toLocaleTimeString("en", { hour: "numeric", minute: "2-digit" })
+    : at.toLocaleDateString("en", { month: "short", day: "numeric" });
 }
 
 function finishNote(m: ChatMessage): string | null {
@@ -648,6 +681,10 @@ export default function Dashboard() {
   const [chatBusy, setChatBusy] = useState(false);
   const [chatSessionId, setChatSessionId] = useState<string | null>(null);
   const [chatLast, setChatLast] = useState<ChatDone | null>(null);
+  // This chat's id in the history, from its first message on.
+  const [chatId, setChatId] = useState<string | null>(null);
+  const [history, setHistory] = useState<SavedChatSummary[] | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const abortRef = useRef<AbortController | null>(null);
@@ -771,6 +808,30 @@ export default function Dashboard() {
     void run();
   }, [signedIn, loadModels]);
 
+  const loadHistory = useCallback(async () => {
+    try {
+      const res = await fetch("/api/history", { cache: "no-store" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setHistoryError(data?.error || `Couldn't load the history (HTTP ${res.status})`);
+        return;
+      }
+      setHistory(data.chats);
+      setHistoryError(null);
+    } catch {
+      setHistoryError("Network error reaching /api/history");
+    }
+  }, []);
+
+  // The history, the first time the Playground opens.
+  useEffect(() => {
+    if (!signedIn || view !== "playground" || history) return;
+    async function run() {
+      await loadHistory();
+    }
+    void run();
+  }, [signedIn, view, history, loadHistory]);
+
   // The monthly report: refreshed with everything else, and at once when the
   // month changes or a run finishes. A reply for a month that's no longer
   // selected is dropped.
@@ -836,6 +897,7 @@ export default function Dashboard() {
     setChatStreaming("");
     setChatStreamingThinking("");
     setChatBusy(false);
+    setChatId(null);
   }
 
   function selectProvider(p: ChatProvider) {
@@ -870,6 +932,8 @@ export default function Dashboard() {
     const prompt = chatInput.trim();
     if (!signedIn || !prompt || chatBusy || paused.includes(chatProvider)) return;
 
+    const id = chatId ?? newChatId();
+    if (!chatId) setChatId(id);
     const model =
       chatModel === CUSTOM_MODEL ? chatCustomModel.trim() : chatModel;
     const maxTokens = Number.parseInt(chatMaxTokens, 10);
@@ -904,7 +968,8 @@ export default function Dashboard() {
               : {}),
         };
 
-    setChatMessages((prev) => [...prev, { role: "user", content: prompt }]);
+    const question: ChatMessage = { role: "user", content: prompt };
+    setChatMessages((prev) => [...prev, question]);
     setChatInput("");
     setChatStreaming("");
     setChatStreamingThinking("");
@@ -918,6 +983,13 @@ export default function Dashboard() {
     // Accumulated locally because the handler closures would see stale state.
     let thinking = "";
     let content = "";
+    // The reply and the session, to save the chat with once the run is over.
+    let reply = null as ChatMessage | null;
+    let sessionId = chatSessionId;
+    const answer = (message: ChatMessage) => {
+      reply = message;
+      setChatMessages((prev) => [...prev, message]);
+    };
 
     await streamChat(body, controller.signal, {
       onThinking: (text) => {
@@ -932,36 +1004,30 @@ export default function Dashboard() {
       },
       onDone: (data) => {
         if (!isCurrent()) return;
-        setChatMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            content: data.result,
-            thinking: thinking || undefined,
-            finishReason: data.finish_reason ?? null,
-          },
-        ]);
-        if (data.session_id) setChatSessionId(data.session_id);
+        answer({
+          role: "assistant",
+          content: data.result,
+          thinking: thinking || undefined,
+          finishReason: data.finish_reason ?? null,
+        });
+        if (data.session_id) {
+          sessionId = data.session_id;
+          setChatSessionId(data.session_id);
+        }
         setChatLast(data);
       },
       onError: (message) => {
         if (!isCurrent()) return;
-        setChatMessages((prev) => [
-          ...prev,
-          { role: "assistant", content: message, isError: true },
-        ]);
+        answer({ role: "assistant", content: message, isError: true });
       },
       onAbort: () => {
         if (!isCurrent()) return;
-        setChatMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            content: content.trim(),
-            thinking: thinking || undefined,
-            finishReason: "stopped",
-          },
-        ]);
+        answer({
+          role: "assistant",
+          content: content.trim(),
+          thinking: thinking || undefined,
+          finishReason: "stopped",
+        });
       },
     });
     // Count this run on the Dashboard and in Analytics now, not at the next tick.
@@ -973,6 +1039,98 @@ export default function Dashboard() {
     setChatStreaming("");
     setChatStreamingThinking("");
     setChatBusy(false);
+    if (reply) {
+      void saveToHistory(id, {
+        provider: chatProvider,
+        model,
+        sessionId,
+        workdir: chatWorkdir.trim(),
+        messages: [...chatMessages, question, reply],
+      });
+    }
+  }
+
+  // Saved after every reply, so the history has each chat as it stands.
+  async function saveToHistory(
+    id: string,
+    chat: Pick<SavedChat, "provider" | "model" | "sessionId" | "workdir" | "messages">,
+  ) {
+    try {
+      const res = await fetch(`/api/history?id=${encodeURIComponent(id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(chat),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setHistoryError(data?.error || `Couldn't save this chat (HTTP ${res.status})`);
+        return;
+      }
+      setHistoryError(null);
+      if (history) {
+        setHistory((list) => list && [data, ...list.filter((c) => c.id !== id)]);
+      } else {
+        await loadHistory(); // it hadn't loaded: this brings the saved chat too
+      }
+    } catch {
+      setHistoryError("Network error saving this chat");
+    }
+  }
+
+  // Picks a saved chat up where it was left: its provider, model and
+  // messages, and the CLI's or web chat's own session, which the next message
+  // continues.
+  async function openSavedChat(id: string) {
+    try {
+      const res = await fetch(`/api/history?id=${encodeURIComponent(id)}`, {
+        cache: "no-store",
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setHistoryError(data?.error || `Couldn't open the chat (HTTP ${res.status})`);
+        return;
+      }
+      const chat = data as SavedChat;
+      const provider = PROVIDER_OPTIONS.find((o) => o.id === chat.provider)?.id;
+      if (!provider) {
+        setHistoryError(`That chat used ${chat.provider}, which this gateway no longer has.`);
+        return;
+      }
+      const listed =
+        !chat.model ||
+        (models?.[provider]?.models ?? []).some((m) => m.id === chat.model);
+      handleClearChat();
+      setChatProvider(provider);
+      setChatModel(listed ? chat.model : CUSTOM_MODEL);
+      setChatCustomModel(listed ? "" : chat.model);
+      setChatWorkdir(chat.workdir);
+      setChatMessages(chat.messages);
+      setChatSessionId(chat.sessionId);
+      setChatId(chat.id);
+      setHistoryError(null);
+      stickToBottom.current = true;
+    } catch {
+      setHistoryError("Network error reaching /api/history");
+    }
+  }
+
+  async function deleteSavedChat(chat: SavedChatSummary) {
+    if (!confirm(`Delete “${chat.title}” from the history?`)) return;
+    try {
+      const res = await fetch(`/api/history?id=${encodeURIComponent(chat.id)}`, {
+        method: "DELETE",
+      });
+      // 404: it's gone already.
+      if (!res.ok && res.status !== 404) {
+        const data = await res.json().catch(() => null);
+        setHistoryError(data?.error || `Couldn't delete the chat (HTTP ${res.status})`);
+        return;
+      }
+      setHistory((list) => list && list.filter((c) => c.id !== chat.id));
+      if (chat.id === chatId) handleClearChat();
+    } catch {
+      setHistoryError("Network error reaching /api/history");
+    }
   }
 
   function signOut() {
@@ -991,6 +1149,8 @@ export default function Dashboard() {
     setPlanLimits(null);
     setPlanLimitsError(null);
     setModels(null);
+    setHistory(null);
+    setHistoryError(null);
     handleClearChat();
   }
 
@@ -1764,8 +1924,85 @@ export default function Dashboard() {
     </>
   );
 
+  // Saved chats, newest first. Opening one picks it up where it was left.
+  const historyPanel = (
+    <aside className={styles.historyPanel}>
+      <div className={styles.historyHead}>
+        <span className={styles.panelTitle}>History</span>
+        <button
+          type="button"
+          className={styles.linkButton}
+          onClick={handleClearChat}
+        >
+          New chat
+        </button>
+      </div>
+      {historyError && (
+        <p className={`${styles.sidebarHint} ${styles.historyNote}`}>
+          {historyError}{" "}
+          {!history && (
+            <button
+              type="button"
+              className={styles.linkButton}
+              onClick={() => void loadHistory()}
+            >
+              Try again
+            </button>
+          )}
+        </p>
+      )}
+      {!history ? (
+        !historyError && (
+          <p className={`${styles.sidebarHint} ${styles.historyNote}`}>
+            Loading…
+          </p>
+        )
+      ) : history.length === 0 ? (
+        <p className={`${styles.sidebarHint} ${styles.historyNote}`}>
+          Chats are saved here as you go, to pick up again later from any
+          browser.
+        </p>
+      ) : (
+        <ul className={styles.historyList}>
+          {history.map((c) => (
+            <li
+              key={c.id}
+              className={`${styles.historyItem} ${
+                c.id === chatId ? styles.historyItemActive : ""
+              }`}
+            >
+              <button
+                type="button"
+                className={styles.historyOpen}
+                title={c.title}
+                onClick={() => void openSavedChat(c.id)}
+              >
+                <span className={styles.historyTitle}>{c.title}</span>
+                <span className={styles.historyMeta}>
+                  {PROVIDER_LABELS[c.provider as ChatProvider] ?? c.provider}
+                  {" · "}
+                  {savedAtLabel(c.updatedAt)}
+                </span>
+              </button>
+              <button
+                type="button"
+                className={styles.historyDelete}
+                title="Delete"
+                aria-label={`Delete “${c.title}”`}
+                onClick={() => void deleteSavedChat(c)}
+              >
+                <Icon name="close" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </aside>
+  );
+
   const playgroundView = (
-    <div className={styles.playground}>
+    <div className={`${styles.playground} ${styles.playgroundWithHistory}`}>
+      {historyPanel}
       <div className={styles.playgroundMain}>
         <div
           className={styles.transcript}

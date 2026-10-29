@@ -1732,11 +1732,140 @@
   color: var(--text-dim);
 }
 
+/* ---------- Playground: history ---------- */
+
+/* Chat, with the saved chats in a column on its left. */
+.playgroundWithHistory {
+  grid-template-columns: 220px minmax(0, 1fr) 290px;
+}
+
+.historyPanel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 170px);
+  min-height: 460px;
+  overflow: hidden;
+}
+
+.historyHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.historyNote {
+  padding: 12px 14px;
+}
+
+.historyList {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.historyItem {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+}
+
+.historyItem:hover {
+  background: var(--surface-2);
+}
+
+.historyItemActive,
+.historyItemActive:hover {
+  background: var(--accent-soft);
+}
+
+.historyOpen {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 8px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.historyTitle,
+.historyMeta {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.historyTitle {
+  font-size: 0.82rem;
+}
+
+.historyMeta {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+/* Shown on hover, or all the time on screens without one. */
+.historyDelete {
+  flex: none;
+  display: inline-flex;
+  padding: 5px;
+  margin-right: 4px;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.historyItem:hover .historyDelete,
+.historyDelete:focus-visible {
+  opacity: 1;
+}
+
+.historyDelete:hover {
+  color: var(--danger-text);
+  background: var(--danger-soft);
+}
+
+.historyDelete svg {
+  width: 13px;
+  height: 13px;
+}
+
+@media (hover: none) {
+  .historyDelete {
+    opacity: 1;
+  }
+}
+
 /* ---------- Responsive ---------- */
 
 @media (max-width: 1100px) {
-  .playground {
+  .playground,
+  .playgroundWithHistory {
     grid-template-columns: minmax(0, 1fr);
+  }
+  /* Under the chat, and only as tall as a few chats. */
+  .historyPanel {
+    order: 1;
+    height: auto;
+    min-height: 0;
+    max-height: 260px;
   }
   .playgroundSidebar {
     position: static;

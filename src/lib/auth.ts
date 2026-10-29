@@ -207,6 +207,17 @@ export async function checkAccess(req: NextRequest, need: Need): Promise<Access>
   return { ok: false, status: 401, error: "Unauthorized" };
 }
 
+// Whose console it is, for what's kept per person (the Playground's saved
+// chats): "owner" for the owner key and its sign-in, or an admin's account
+// id from theirs. Only once checkAccess(req, "owner") has let the request in.
+export function consoleUser(req: NextRequest): string {
+  const appKey = process.env.APP_API_KEY;
+  if (!appKey || req.headers.get("authorization")?.startsWith("Bearer ")) return "owner";
+  const session = req.cookies.get(SESSION_COOKIE)?.value;
+  const m = /^v2\.\d+\.([0-9a-f-]{36})\./.exec(session ?? "");
+  return m && validSession(session, appKey) ? m[1] : "owner";
+}
+
 // ---------------------------------------------------------------------------
 // What an access token may do with a provider
 // ---------------------------------------------------------------------------
