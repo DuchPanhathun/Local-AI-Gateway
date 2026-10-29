@@ -1628,6 +1628,110 @@
   word-break: break-all;
 }
 
+/* ---------- Playground: speech ---------- */
+
+/* Chat / Speech to text / Text to speech, in the Playground's header. */
+.modeSwitch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.modeOption {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.modeOption:hover {
+  color: var(--text);
+}
+
+.modeOptionActive,
+.modeOptionActive:hover {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Applied together with .playgroundMain while a file is dragged over it. */
+.dropTarget {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* The clip to transcribe and the buttons under it; a spoken clip's player. */
+.clipRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+}
+
+.clipRow + .clipRow,
+.turnContent + .clipRow {
+  margin-top: 10px;
+}
+
+.clipAudio {
+  flex: 1;
+  min-width: 220px;
+  max-width: 480px;
+  height: 36px;
+}
+
+.clipName {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+/* Pushes the row's main button to its end. */
+.clipSend {
+  margin-left: auto;
+}
+
+.recording {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.recordingDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 0 3px var(--danger-soft);
+  animation: blink 1s step-start infinite;
+}
+
+/* Under a transcript or a spoken clip: what it was, and what to do with it. */
+.resultMeta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 10px 0;
+  font-size: 0.76rem;
+  color: var(--text-dim);
+}
+
 /* ---------- Responsive ---------- */
 
 @media (max-width: 1100px) {

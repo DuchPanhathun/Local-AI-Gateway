@@ -27,7 +27,11 @@ export type IconName =
   | "send"
   | "sparkle"
   | "pause"
-  | "play";
+  | "play"
+  | "mic"
+  | "speaker"
+  | "upload"
+  | "download";
 
 const ICON_PATHS: Record<IconName, ReactNode> = {
   dashboard: (
@@ -165,6 +169,34 @@ const ICON_PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   play: <polygon points="6 3 20 12 6 21 6 3" />,
+  mic: (
+    <>
+      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+      <path d="M12 19v3" />
+    </>
+  ),
+  speaker: (
+    <>
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+      <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+      <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+    </>
+  ),
+  upload: (
+    <>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <path d="m17 8-5-5-5 5" />
+      <path d="M12 3v12" />
+    </>
+  ),
+  download: (
+    <>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M12 15V3" />
+    </>
+  ),
 };
 
 export function Icon({ name, className }: { name: IconName; className?: string }) {

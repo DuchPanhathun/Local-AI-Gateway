@@ -25,6 +25,7 @@ import {
   type ChatProvider,
 } from "./providers";
 import { Shop } from "./shop";
+import { SpeechPlayground, type SpeechMode } from "./speech";
 import { getThemePref, setThemePref, subscribeTheme, type ThemePref } from "./theme";
 import { CopyButton, dayLabel, formatCount, monthLabel, ProgressBar } from "./ui";
 import { Users } from "./users";
@@ -147,6 +148,8 @@ function localKind(p: ChatProvider): string {
 
 // Sentinel <select> value: the model id is typed into a text field instead.
 const CUSTOM_MODEL = "__custom__";
+// The Provider list's first choice: the Model list shows every provider's.
+const ALL_PROVIDERS = "__all__";
 
 type ProviderModels = {
   kind: "cloud" | "local";
@@ -180,6 +183,7 @@ type ChatMessage = {
 };
 
 type View = "dashboard" | "playground" | "api-keys" | "users" | "codes" | "shop" | "analytics" | "manage";
+type PlaygroundMode = "chat" | SpeechMode;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -248,6 +252,31 @@ const NAV_ITEMS: {
     icon: "manage",
     description:
       "Pause or resume providers, the API reference, and the coding CLIs installed on this machine.",
+  },
+];
+
+// The Playground's modes, switched in its header. Chat goes by the
+// Playground's own description, above.
+const PLAYGROUND_MODES: {
+  id: PlaygroundMode;
+  label: string;
+  icon: IconName;
+  description?: string;
+}[] = [
+  { id: "chat", label: "Chat", icon: "sparkle" },
+  {
+    id: "transcribe",
+    label: "Speech to text",
+    icon: "mic",
+    description:
+      "Record or upload audio and see what Groq's Whisper or MiMo's speech recognition writes down.",
+  },
+  {
+    id: "speak",
+    label: "Text to speech",
+    icon: "speaker",
+    description:
+      "Type something and hear it in one of MiMo's voices, or in a voice you describe.",
   },
 ];
 
@@ -547,6 +576,7 @@ const ACCOUNTS_ON = Boolean(
 
 export default function Dashboard() {
   const [view, setView] = useState<View>("dashboard");
+  const [playgroundMode, setPlaygroundMode] = useState<PlaygroundMode>("chat");
   const theme = useSyncExternalStore(
     subscribeTheme,
     getThemePref,
@@ -604,6 +634,8 @@ export default function Dashboard() {
 
   const [chatProvider, setChatProvider] = useState<ChatProvider>("claude");
   const [chatModel, setChatModel] = useState("");
+  // The Model list: every provider's models, or only the chosen provider's.
+  const [allModels, setAllModels] = useState(true);
   const [chatCustomModel, setChatCustomModel] = useState("");
   const [chatWorkdir, setChatWorkdir] = useState("");
   const [chatMaxTokens, setChatMaxTokens] = useState("");
@@ -813,8 +845,23 @@ export default function Dashboard() {
     handleClearChat();
   }
 
+  // The Model list's value: "" (the provider's default), CUSTOM_MODEL, or
+  // "<provider>:<model id>" from any provider, which switches to it first.
+  function selectModel(value: string) {
+    const at = value.indexOf(":");
+    if (at === -1) {
+      setChatModel(value);
+      return;
+    }
+    const p = value.slice(0, at) as ChatProvider;
+    if (p !== chatProvider) selectProvider(p);
+    setChatModel(value.slice(at + 1));
+  }
+
   function openInPlayground(p: ChatProvider) {
     selectProvider(p);
+    setAllModels(false);
+    setPlaygroundMode("chat");
     setView("playground");
   }
 
@@ -1233,6 +1280,11 @@ export default function Dashboard() {
   ).length;
 
   const currentNav = NAV_ITEMS.find((n) => n.id === view) ?? NAV_ITEMS[0];
+  const pageDescription =
+    (view === "playground" &&
+      PLAYGROUND_MODES.find((m) => m.id === playgroundMode)?.description) ||
+    currentNav.description;
+  const speechShown = view === "playground" && playgroundMode !== "chat";
   const chatIsCloud = isCloudProvider(chatProvider);
   const chatPaused = isPaused(chatProvider);
   const chatLabel = PROVIDER_LABELS[chatProvider];
@@ -1241,6 +1293,10 @@ export default function Dashboard() {
     chatModel === CUSTOM_MODEL ? chatCustomModel.trim() : chatModel;
   const modelSummary =
     effectiveModel || (chatIsCloud ? providerModels?.default : null) || "";
+  const modelCount = Object.values(models ?? {}).reduce(
+    (sum, p) => sum + p.models.length,
+    0,
+  );
 
   // -------------------------------------------------------------------------
   // Views
@@ -1881,10 +1937,17 @@ export default function Dashboard() {
             <select
               id="pg-provider"
               className={styles.select}
-              value={chatProvider}
+              value={allModels ? ALL_PROVIDERS : chatProvider}
               disabled={chatBusy}
-              onChange={(e) => selectProvider(e.target.value as ChatProvider)}
+              onChange={(e) => {
+                const value = e.target.value;
+                setAllModels(value === ALL_PROVIDERS);
+                if (value !== ALL_PROVIDERS && value !== chatProvider) {
+                  selectProvider(value as ChatProvider);
+                }
+              }}
             >
+              <option value={ALL_PROVIDERS}>All providers</option>
               <optgroup label="Cloud APIs">
                 {CLOUD_PROVIDERS.map((p) => (
                   <option key={p} value={p} disabled={isPaused(p)}>
@@ -1908,21 +1971,45 @@ export default function Dashboard() {
             <select
               id="pg-model"
               className={styles.select}
-              value={chatModel}
+              value={
+                chatModel === "" || chatModel === CUSTOM_MODEL
+                  ? chatModel
+                  : `${chatProvider}:${chatModel}`
+              }
               disabled={chatBusy}
-              onChange={(e) => setChatModel(e.target.value)}
+              onChange={(e) => selectModel(e.target.value)}
             >
               <option value="">
-                {chatIsCloud && providerModels?.default
-                  ? `Default · ${providerModels.default}`
-                  : "Default"}
+                {`Default for ${chatLabel}${
+                  chatIsCloud && providerModels?.default
+                    ? ` · ${providerModels.default}`
+                    : ""
+                }`}
               </option>
-              {(providerModels?.models ?? []).map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name === m.id ? m.id : `${m.name} (${m.id})`}
-                </option>
-              ))}
-              <option value={CUSTOM_MODEL}>Custom…</option>
+              {PROVIDER_OPTIONS.filter(
+                ({ id }) => allModels || id === chatProvider,
+              ).map(({ id: p, label }) => {
+                const list = models?.[p]?.models ?? [];
+                return (
+                  list.length > 0 && (
+                    <optgroup
+                      key={p}
+                      label={`${label}${isPaused(p) ? " (paused)" : ""}`}
+                    >
+                      {list.map((m) => (
+                        <option
+                          key={m.id}
+                          value={`${p}:${m.id}`}
+                          disabled={isPaused(p)}
+                        >
+                          {m.name === m.id ? m.id : `${m.name} (${m.id})`}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )
+                );
+              })}
+              <option value={CUSTOM_MODEL}>{`Custom ${chatLabel} model…`}</option>
             </select>
           </div>
           {chatModel === CUSTOM_MODEL && (
@@ -1934,7 +2021,15 @@ export default function Dashboard() {
               disabled={chatBusy}
             />
           )}
-          {!models && <p className={styles.sidebarHint}>Loading models…</p>}
+          {models ? (
+            <p className={styles.sidebarHint}>
+              {allModels
+                ? `${modelCount} models across all providers. Picking one switches to its provider.`
+                : `${providerModels?.models.length ?? 0} of the ${modelCount} models. Choose All providers to list them all.`}
+            </p>
+          ) : (
+            <p className={styles.sidebarHint}>Loading models…</p>
+          )}
           {providerModels?.note && (
             <p className={styles.sidebarHint}>
               {asSentence(providerModels.note)}
@@ -2706,6 +2801,24 @@ export default function Dashboard() {
       >
         Open Playground <Icon name="arrow" />
       </button>
+    ) : view === "playground" ? (
+      <div className={styles.modeSwitch} role="tablist" aria-label="Playground mode">
+        {PLAYGROUND_MODES.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            role="tab"
+            aria-selected={playgroundMode === m.id}
+            className={`${styles.modeOption} ${
+              playgroundMode === m.id ? styles.modeOptionActive : ""
+            }`}
+            onClick={() => setPlaygroundMode(m.id)}
+          >
+            <Icon name={m.icon} />
+            {m.label}
+          </button>
+        ))}
+      </div>
     ) : view === "analytics" ? (
       <label className={styles.switchRow}>
         <span>Show idle keys</span>
@@ -2794,7 +2907,7 @@ export default function Dashboard() {
         <div className={styles.pageHeader}>
           <div>
             <h1 className={styles.pageTitle}>{currentNav.label}</h1>
-            <p className={styles.pageDesc}>{currentNav.description}</p>
+            <p className={styles.pageDesc}>{pageDescription}</p>
           </div>
           <div className={styles.pageActions}>
             {generatedAt && (
@@ -2814,7 +2927,18 @@ export default function Dashboard() {
         )}
 
         {view === "dashboard" && dashboardView}
-        {view === "playground" && playgroundView}
+        {view === "playground" && playgroundMode === "chat" && playgroundView}
+        {/* Mounted all along, like the chat's state, so its clips and
+            results outlive a visit to another page. */}
+        <div hidden={!speechShown}>
+          <SpeechPlayground
+            mode={playgroundMode === "chat" ? "transcribe" : playgroundMode}
+            active={speechShown}
+            paused={paused}
+            onModeChange={setPlaygroundMode}
+            onManage={() => setView("manage")}
+          />
+        </div>
         {view === "api-keys" && apiKeysView}
         {view === "users" && <Users providers={PROVIDER_OPTIONS} />}
         {view === "codes" && <Codes providers={PROVIDER_OPTIONS} />}
