@@ -10,6 +10,7 @@
 // chatgpt.com, grok.com and Xiaomi MiMo Studio in its own signed-in Chrome
 // window. It speaks the same API, so it's called the same way at its own address.
 
+import { Agent, fetch as undiciFetch } from "undici";
 import { getDayUsage, recordUsageEvent, todayUTC } from "./usage-ledger";
 
 export type LocalAgentProviderId =
@@ -110,12 +111,21 @@ function askBody(req: AskRequest): string {
   );
 }
 
+// A run can think for minutes without sending a byte (Gemini High: 309 seconds of
+// silence, then the whole answer). Node's fetch gives up on a response that stays
+// quiet for 5 minutes (headersTimeout and bodyTimeout) and reports it as just
+// "terminated", which cut every long run off. The gateway has its own clock
+// (REQUEST_TIMEOUT_S), so these calls get no second one. The package is pinned to
+// the undici version built into Node, so the two cannot disagree.
+const patient = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+
 export async function ask(req: AskRequest): Promise<GatewayCallResult> {
   const gateway = gatewayFor(req.provider);
-  const res = await fetch(`${gateway.url}/ask`, {
+  const res = await undiciFetch(`${gateway.url}/ask`, {
     method: "POST",
     headers: authHeaders(gateway, { "Content-Type": "application/json" }),
     body: askBody(req),
+    dispatcher: patient,
   });
   return { status: res.status, data: await res.json() };
 }
@@ -127,12 +137,14 @@ export async function ask(req: AskRequest): Promise<GatewayCallResult> {
 // completion unread.
 export async function askStream(req: AskRequest, signal?: AbortSignal): Promise<Response> {
   const gateway = gatewayFor(req.provider);
-  return fetch(`${gateway.url}/ask/stream`, {
+  const res = await undiciFetch(`${gateway.url}/ask/stream`, {
     method: "POST",
     headers: authHeaders(gateway, { "Content-Type": "application/json" }),
     body: askBody(req),
     signal,
+    dispatcher: patient,
   });
+  return res as unknown as Response; // same API; undici's own type for it differs only in name
 }
 
 export type ImageRequest = {
