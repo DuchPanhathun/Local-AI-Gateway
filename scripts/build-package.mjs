@@ -1,0 +1,133 @@
+#!/usr/bin/env node
+// Builds the `npx local-ai-gateway` package (packaging/local-ai-gateway) from this
+// repo and the two gateways, then packs it:
+//
+//   node scripts/build-package.mjs [--local-agent DIR] [--chatgpt-web DIR]
+//
+// The gateways default to ../local-agent and ../chatgpt-web. The console is built
+// with a clean environment (no Supabase address, no keys) in its own .next-local
+// folder, so what ships has none of this server's settings, and a scan at the end
+// fails the build if any secret from a local .env file turns up in the package.
+import { spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const pkgDir = path.join(root, "packaging", "local-ai-gateway");
+
+function arg(name, fallback) {
+  const i = process.argv.indexOf(name);
+  return path.resolve(i >= 0 ? process.argv[i + 1] : fallback);
+}
+const gateways = {
+  "local-agent": arg("--local-agent", path.join(root, "..", "local-agent")),
+  "chatgpt-web": arg("--chatgpt-web", path.join(root, "..", "chatgpt-web")),
+};
+
+function run(command, args, options = {}) {
+  const r = spawnSync(command, args, { stdio: "inherit", cwd: root, ...options });
+  if (r.status !== 0) {
+    console.error(`\n${command} ${args.join(" ")} failed.`);
+    process.exit(r.status ?? 1);
+  }
+}
+
+for (const [name, dir] of Object.entries(gateways)) {
+  if (!existsSync(path.join(dir, "src")) || !existsSync(path.join(dir, "pyproject.toml"))) {
+    console.error(`Can't find the ${name} source at ${dir}. Pass --${name} DIR.`);
+    process.exit(1);
+  }
+}
+
+// `next build` rewrites tsconfig.json (it adds the build folder's type files and reformats
+// the file). Put it back however this script ends.
+const tsconfig = path.join(root, "tsconfig.json");
+const tsconfigBefore = readFileSync(tsconfig, "utf8");
+process.on("exit", () => writeFileSync(tsconfig, tsconfigBefore));
+
+// 1. The console, built clean.
+console.log("== Building the console (standalone, clean environment)");
+rmSync(path.join(root, ".next-local"), { recursive: true, force: true });
+run("npx", ["next", "build"], {
+  env: {
+    ...process.env,
+    LOCAL_EDITION_BUILD: "1",
+    NEXT_PUBLIC_SUPABASE_URL: "", // set, so a .env file can't fill them in: no accounts in this edition
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: "",
+    NEXT_TELEMETRY_DISABLED: "1",
+  },
+});
+
+// 2. Assemble: the console as one archive, the gateways' source beside it.
+console.log("== Assembling the package");
+const standalone = path.join(root, ".next-local", "standalone");
+if (!existsSync(path.join(standalone, "server.js"))) {
+  console.error("The standalone build has no server.js.");
+  process.exit(1);
+}
+// The standalone build copies in the project's .env files (the keys of whoever built it!) and the
+// extension download. Neither belongs in a package for other people.
+for (const name of readdirSync(standalone)) if (name.startsWith(".env")) rmSync(path.join(standalone, name), { force: true });
+rmSync(path.join(standalone, "extension"), { recursive: true, force: true });
+cpSync(path.join(root, "public"), path.join(standalone, "public"), { recursive: true });
+cpSync(path.join(root, ".next-local", "static"), path.join(standalone, ".next-local", "static"), { recursive: true });
+rmSync(path.join(pkgDir, "app.tgz"), { force: true });
+run("tar", ["-czf", path.join(pkgDir, "app.tgz"), "-C", standalone, "."]);
+
+rmSync(path.join(pkgDir, "gateways"), { recursive: true, force: true });
+for (const [name, dir] of Object.entries(gateways)) {
+  const out = path.join(pkgDir, "gateways", name);
+  mkdirSync(out, { recursive: true });
+  cpSync(path.join(dir, "src"), path.join(out, "src"), { recursive: true, filter: (file) => !file.includes("__pycache__") });
+  cpSync(path.join(dir, "pyproject.toml"), path.join(out, "pyproject.toml"));
+  if (existsSync(path.join(dir, "README.md"))) cpSync(path.join(dir, "README.md"), path.join(out, "README.md"));
+}
+
+// 3. No secret from any .env file here may be in what ships (the console archive is
+// unpacked to look inside it).
+console.log("== Scanning for secrets");
+const secrets = new Set();
+for (const dir of [root, ...Object.values(gateways)]) {
+  for (const name of readdirSync(dir).filter((f) => f.startsWith(".env") && !f.endsWith(".example"))) {
+    for (const line of readFileSync(path.join(dir, name), "utf8").split("\n")) {
+      const m = /^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.+?)\s*$/.exec(line);
+      const value = m?.[1].replace(/^(['"])(.*)\1$/, "$2");
+      if (value && value.length >= 16 && !/^https?:\/\//.test(value)) secrets.add(value);
+    }
+  }
+}
+const scanDir = path.join(root, ".next-local", "scan");
+rmSync(scanDir, { recursive: true, force: true });
+mkdirSync(scanDir, { recursive: true });
+run("tar", ["-xzf", path.join(pkgDir, "app.tgz"), "-C", scanDir]);
+let hits = 0;
+let files = 0;
+function scan(dir) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const file = path.join(dir, entry.name);
+    if (entry.isDirectory()) scan(file);
+    else if (entry.isFile() && statSync(file).size < 8_000_000) {
+      files++;
+      const text = readFileSync(file, "latin1");
+      for (const secret of secrets) {
+        if (text.includes(secret)) {
+          hits++;
+          console.error(`  LEAK: a secret from a .env file is in ${path.relative(scanDir, file)}`);
+        }
+      }
+    }
+  }
+}
+scan(scanDir);
+scan(path.join(pkgDir, "gateways"));
+rmSync(scanDir, { recursive: true, force: true });
+if (hits) {
+  console.error(`\n${hits} leak(s) found. Not packing.`);
+  process.exit(1);
+}
+console.log(`  checked ${secrets.size} secret value(s) against ${files} files: none found`);
+
+// 4. Pack.
+console.log("== Packing");
+run("npm", ["pack", "--pack-destination", path.join(root, "packaging")], { cwd: pkgDir });

@@ -1,0 +1,32 @@
+{
+  "name": "local-ai-gateway",
+  "version": "0.1.0",
+  "description": "Run Local AI Gateway on your own computer: one console and API in front of your own Claude Code, Codex, Gemini CLI, Antigravity and ChatGPT/Grok/MiMo accounts.",
+  "type": "module",
+  "bin": {
+    "local-ai-gateway": "bin/cli.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "linux",
+    "darwin"
+  ],
+  "files": [
+    "bin",
+    "app.tgz",
+    "gateways",
+    "README.md"
+  ],
+  "keywords": [
+    "ai",
+    "gateway",
+    "claude-code",
+    "codex",
+    "gemini-cli",
+    "antigravity",
+    "local"
+  ],
+  "license": "UNLICENSED"
+}

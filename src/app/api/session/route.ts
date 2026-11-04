@@ -26,11 +26,14 @@ function fail(status: number, error: string, extra: Record<string, unknown> = {}
   return NextResponse.json({ error, ...extra }, { status, headers: NO_STORE });
 }
 
-// Signed in?
+// Signed in? And `local`: this is the one-person edition that `npx
+// local-ai-gateway` runs on someone's own computer (LOCAL_EDITION=1), which
+// has no accounts, shop or access for other people, so the console leaves
+// those pages out.
 export function GET(req: NextRequest) {
   const appKey = process.env.APP_API_KEY;
   const signedIn = !!appKey && validSession(req.cookies.get(SESSION_COOKIE)?.value, appKey);
-  return NextResponse.json({ signedIn }, { headers: NO_STORE });
+  return NextResponse.json({ signedIn, local: process.env.LOCAL_EDITION === "1" }, { headers: NO_STORE });
 }
 
 // Sign in: {"key": "<APP_API_KEY>"}, or {"accessToken": "<a Supabase

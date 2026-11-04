@@ -12,8 +12,14 @@ const SECURITY_HEADERS = [
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
 ];
 
+// `npx local-ai-gateway` runs a self-contained build of this app (see
+// packaging/): its own folder, so building it doesn't touch the .next the
+// dev and production servers use.
+const localBuild = process.env.LOCAL_EDITION_BUILD === "1";
+
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  ...(localBuild ? { output: "standalone" as const, distDir: ".next-local" } : {}),
   async headers() {
     return [
       { source: "/:path*", headers: SECURITY_HEADERS },

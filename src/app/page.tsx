@@ -304,6 +304,10 @@ const NAV_ITEMS: {
   },
 ];
 
+// What the one-person edition leaves out: other people's accounts, codes, the
+// shop and the extension download (the extension points at a hosted gateway).
+const LOCAL_HIDDEN = new Set<View>(["users", "codes", "shop", "extension"]);
+
 // The Playground's modes, switched in its header. Chat goes by the
 // Playground's own description, above.
 const PLAYGROUND_MODES: {
@@ -555,6 +559,8 @@ let signedInNow: boolean | undefined;
 // Someone signed in on /account in this browser who isn't an admin: their
 // email, so the sign-in page can send them back to their own dashboard.
 let customerNow: string | null = null;
+// The one-person edition (see /api/session): no accounts, shop or other users.
+let localEditionNow = false;
 
 function subscribeSession(callback: () => void) {
   window.addEventListener(SESSION_EVENT, callback);
@@ -567,6 +573,10 @@ function getSignedIn(): boolean | undefined {
 
 function getCustomer(): string | null {
   return customerNow;
+}
+
+function getLocalEdition(): boolean {
+  return localEditionNow;
 }
 
 function forgetCustomer() {
@@ -587,9 +597,17 @@ async function checkSession() {
     window.location.replace(new URL(`/account${hash}`, window.location.origin).href);
     return;
   }
+  // The link `npx local-ai-gateway` prints carries the key after a #, which
+  // no server ever sees: sign in with it, and take it out of the address.
+  const linked = /[#&]key=([\w-]+)/.exec(hash);
+  if (linked) {
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    await consoleSignIn({ key: linked[1] }).catch(() => null);
+  }
   try {
     const res = await fetch("/api/session", { cache: "no-store" });
-    const data = (await res.json()) as { signedIn?: boolean };
+    const data = (await res.json()) as { signedIn?: boolean; local?: boolean };
+    localEditionNow = !!data.local;
     setSignedIn(!!data.signedIn || (await adminFromAccount()));
   } catch {
     setSignedIn(false);
@@ -653,6 +671,7 @@ export default function Dashboard() {
     () => undefined,
   );
   const customer = useSyncExternalStore(subscribeSession, getCustomer, () => null);
+  const localEdition = useSyncExternalStore(subscribeSession, getLocalEdition, () => false);
   useEffect(() => {
     void checkSession();
   }, []);
@@ -3289,7 +3308,7 @@ export default function Dashboard() {
 
         <div className={styles.navLabel}>Console</div>
         <nav className={styles.nav}>
-          {NAV_ITEMS.map((item) => (
+          {NAV_ITEMS.filter((item) => !localEdition || !LOCAL_HIDDEN.has(item.id)).map((item) => (
             <button
               key={item.id}
               type="button"
