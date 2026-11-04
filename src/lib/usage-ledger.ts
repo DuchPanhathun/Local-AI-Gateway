@@ -1,5 +1,5 @@
 import { readFileSync, renameSync } from "node:fs";
-import { recordKeyUsage } from "./api-tokens";
+import { estimateTokens, recordKeyUsage } from "./api-tokens";
 import { statePath, writeJsonAtomic, writeJsonAtomicSync } from "./state-files";
 
 // Usage that outlives restarts: requests and tokens per UTC day, provider and
@@ -29,6 +29,11 @@ export type UsageOutcome = {
   // The prompt's and answer's length, for estimating the caller's tokens when
   // the provider doesn't report them.
   textChars?: number;
+  // The same lengths apart, for a run that reported no tokens (a web chat,
+  // Codex, Gemini): when it gave a text answer, the ledger keeps an estimate
+  // of its tokens, beside the reported ones and marked as an estimate.
+  promptChars?: number;
+  answerChars?: number;
 };
 
 type Counts = {
@@ -38,6 +43,11 @@ type Counts = {
   completionTokens: number;
   totalTokens: number;
   tokensReported: number; // requests that said how many tokens they used
+  // Requests that said nothing but answered in text, and their tokens estimated
+  // from the text's length. Never added to the reported counts above.
+  estimatedRequests: number;
+  estimatedPromptTokens: number;
+  estimatedCompletionTokens: number;
   durationMs: number; // summed over finished requests that were timed
   timed: number;
   lastUsed: number; // epoch ms
@@ -73,6 +83,9 @@ function emptyCounts(): Counts {
     completionTokens: 0,
     totalTokens: 0,
     tokensReported: 0,
+    estimatedRequests: 0,
+    estimatedPromptTokens: 0,
+    estimatedCompletionTokens: 0,
     durationMs: 0,
     timed: 0,
     lastUsed: 0,
@@ -193,6 +206,10 @@ export function recordUsageEvent(provider: string, model: string, outcome: Usage
     entry.completionTokens += tokens.completion;
     entry.totalTokens += tokens.total;
     entry.tokensReported += 1;
+  } else if (outcome.status === "ok" && outcome.answerChars) {
+    entry.estimatedRequests += 1;
+    entry.estimatedPromptTokens += estimateTokens(outcome.promptChars ?? 0);
+    entry.estimatedCompletionTokens += estimateTokens(outcome.answerChars);
   }
   if (outcome.status === "ok" && typeof outcome.durationMs === "number") {
     entry.durationMs += count(outcome.durationMs);
@@ -226,13 +243,18 @@ export type UsageTotals = {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  // What was estimated from text length for runs that reported none (web
+  // chats, Codex, Gemini), on top of the reported counts above.
+  estimatedPromptTokens: number;
+  estimatedCompletionTokens: number;
+  estimatedTokens: number;
 };
 
 export type ModelUsage = UsageTotals & {
   provider: string;
   model: string;
   // False when none of its requests reported tokens (Codex, Gemini, Whisper):
-  // its token counts then mean "unknown", not "none".
+  // its reported counts then mean "unknown", not "none" (see the estimated ones).
   tokensReported: boolean;
   avgDurationMs: number | null;
   timed: number;
@@ -246,6 +268,9 @@ function totalsOf(c: Counts): UsageTotals {
     promptTokens: c.promptTokens,
     completionTokens: c.completionTokens,
     totalTokens: c.totalTokens,
+    estimatedPromptTokens: c.estimatedPromptTokens,
+    estimatedCompletionTokens: c.estimatedCompletionTokens,
+    estimatedTokens: c.estimatedPromptTokens + c.estimatedCompletionTokens,
   };
 }
 
@@ -266,6 +291,8 @@ function modelUsage(days: string[]): ModelUsage[] {
         c.completionTokens += e.completionTokens ?? 0;
         c.totalTokens += e.totalTokens ?? 0;
         c.tokensReported += e.tokensReported ?? 0;
+        c.estimatedPromptTokens += e.estimatedPromptTokens ?? 0;
+        c.estimatedCompletionTokens += e.estimatedCompletionTokens ?? 0;
         c.durationMs += e.durationMs ?? 0;
         c.timed += e.timed ?? 0;
         c.lastUsed = Math.max(c.lastUsed, e.lastUsed ?? 0);
@@ -284,7 +311,7 @@ function modelUsage(days: string[]): ModelUsage[] {
     }))
     .sort(
       (a, b) =>
-        b.totalTokens - a.totalTokens ||
+        b.totalTokens + b.estimatedTokens - (a.totalTokens + a.estimatedTokens) ||
         b.requests - a.requests ||
         a.provider.localeCompare(b.provider) ||
         a.model.localeCompare(b.model)
@@ -320,7 +347,7 @@ export type MonthUsage = {
   month: string;
   totals: UsageTotals;
   models: ModelUsage[];
-  days: { day: string; requests: number; totalTokens: number }[]; // every day of the month
+  days: { day: string; requests: number; totalTokens: number; estimatedTokens: number }[]; // every day of the month
 };
 
 // `month` is "2026-10" (UTC).
@@ -330,26 +357,34 @@ export function getMonthUsage(month: string): MonthUsage {
   const dayList = Array.from({ length }, (_, i) => `${month}-${String(i + 1).padStart(2, "0")}`);
   const models = modelUsage(dayList);
 
-  const totals: UsageTotals = { requests: 0, errors: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  const totals: UsageTotals = {
+    requests: 0, errors: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0,
+    estimatedPromptTokens: 0, estimatedCompletionTokens: 0, estimatedTokens: 0,
+  }; // fmt: skip
   for (const m of models) {
     totals.requests += m.requests;
     totals.errors += m.errors;
     totals.promptTokens += m.promptTokens;
     totals.completionTokens += m.completionTokens;
     totals.totalTokens += m.totalTokens;
+    totals.estimatedPromptTokens += m.estimatedPromptTokens;
+    totals.estimatedCompletionTokens += m.estimatedCompletionTokens;
+    totals.estimatedTokens += m.estimatedTokens;
   }
 
   const { ledger } = store();
   const days = dayList.map((day) => {
     let requests = 0;
     let totalTokens = 0;
+    let estimatedTokens = 0;
     for (const models of Object.values(ledger.days[day] ?? {})) {
       for (const e of Object.values(models)) {
         requests += e.requests ?? 0;
         totalTokens += e.totalTokens ?? 0;
+        estimatedTokens += (e.estimatedPromptTokens ?? 0) + (e.estimatedCompletionTokens ?? 0);
       }
     }
-    return { day, requests, totalTokens };
+    return { day, requests, totalTokens, estimatedTokens };
   });
 
   return { month, totals, models, days };

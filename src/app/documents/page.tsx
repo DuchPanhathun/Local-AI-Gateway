@@ -287,7 +287,10 @@ const USAGE_RESPONSE = `{
     "errors": 0,
     "promptTokens": 122819,
     "completionTokens": 12995,
-    "totalTokens": 135814
+    "totalTokens": 135814,
+    "estimatedPromptTokens": 2210,
+    "estimatedCompletionTokens": 1480,
+    "estimatedTokens": 3690
   },
   "models": [
     {
@@ -299,6 +302,9 @@ const USAGE_RESPONSE = `{
       "completionTokens": 404,
       "totalTokens": 55157,
       "tokensReported": true,
+      "estimatedPromptTokens": 0,
+      "estimatedCompletionTokens": 0,
+      "estimatedTokens": 0,
       "avgDurationMs": 3900,
       "timed": 9,
       "lastUsedAt": "2026-10-15T15:03:13.000Z"
@@ -306,7 +312,7 @@ const USAGE_RESPONSE = `{
     …
   ],
   "days": [
-    { "day": "2026-10-01", "requests": 0, "totalTokens": 0 },
+    { "day": "2026-10-01", "requests": 0, "totalTokens": 0, "estimatedTokens": 0 },
     …
   ],
   "generatedAt": "2026-10-16T02:30:00.000Z"
@@ -337,6 +343,8 @@ const QUOTAS_RESPONSE = `{
       "promptTokensToday": 86020,
       "completionTokensToday": 1210,
       "tokensToday": 87230,
+      "estimatedPromptTokensToday": 0,
+      "estimatedCompletionTokensToday": 0,
       "tokensReported": true,
       "avgDurationMs": 8100,
       "finishedToday": 4,
@@ -986,8 +994,16 @@ export default function DocumentsPage() {
               </li>
               <li>
                 <code>tokensReported: false</code> means none of that model’s requests said how
-                many tokens they used (Codex, Gemini CLI, Whisper), so its zeros mean
-                “unknown”.
+                many tokens they used (the web chats, Codex, Gemini CLI, Whisper), so its zeros
+                mean “unknown”.
+              </li>
+              <li>
+                For a run that reported nothing but answered in text, the <code>estimated…</code>{" "}
+                fields hold its tokens estimated from the text’s length (about 4 characters a
+                token): the prompt you sent and the answer that came back. They are kept apart from
+                the reported counts and never added to them, so add the two for a total. Failed
+                requests, empty answers, speech, transcription and images add nothing. The console
+                marks the sums with ≈.
               </li>
               <li>
                 Usage is saved on the server, so restarts and updates don’t reset it. It’s kept for

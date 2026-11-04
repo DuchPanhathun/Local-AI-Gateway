@@ -62,6 +62,8 @@ type LocalUsage = {
   promptTokensToday: number;
   completionTokensToday: number;
   tokensToday: number;
+  estimatedPromptTokensToday: number;
+  estimatedCompletionTokensToday: number;
   tokensReported: boolean;
   avgDurationMs: number | null;
   finishedToday: number;
@@ -74,6 +76,11 @@ type UsageTotals = {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  // Estimated from text length for runs that reported none (web chats, Codex,
+  // Gemini), on top of the counts above.
+  estimatedPromptTokens: number;
+  estimatedCompletionTokens: number;
+  estimatedTokens: number;
 };
 
 type ModelUsage = UsageTotals & {
@@ -91,7 +98,7 @@ type MonthUsage = {
   months: string[];
   totals: UsageTotals;
   models: ModelUsage[];
-  days: { day: string; requests: number; totalTokens: number }[];
+  days: { day: string; requests: number; totalTokens: number; estimatedTokens: number }[];
 };
 
 type LocalAgentProviderHealth = {
@@ -441,6 +448,17 @@ function newChatId(): string {
     `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
   );
 }
+
+// A token count for a table cell: the reported tokens with what was estimated
+// added (marked ≈), or — when the provider said nothing and nothing could be
+// estimated either.
+function tokenCell(reported: boolean, value: number, estimated: number): string {
+  if (!reported && estimated === 0) return "—";
+  return `${estimated > 0 ? "≈" : ""}${(value + estimated).toLocaleString()}`;
+}
+
+const dayTokens = (d: { totalTokens: number; estimatedTokens: number }) =>
+  d.totalTokens + d.estimatedTokens;
 
 // When a saved chat was last used: the time today, else the date.
 function savedAtLabel(iso: string): string {
@@ -1494,14 +1512,20 @@ export default function Dashboard() {
       errors: rows.reduce((sum, r) => sum + r.errorsToday, 0),
       tokens: rows.reduce((sum, r) => sum + r.tokensToday, 0),
       tokensReported: rows.some((r) => r.tokensReported),
+      estimated: rows.reduce(
+        (sum, r) => sum + r.estimatedPromptTokensToday + r.estimatedCompletionTokensToday,
+        0,
+      ),
       avgDurationMs: finished ? durationMs / finished : null,
     };
   }
 
-  // A CLI that ran today without reporting tokens (Codex, Gemini) used an
-  // unknown number, not zero.
+  // A CLI or website that ran today without reporting tokens (web chats,
+  // Codex, Gemini) used an unknown number, not zero: shown estimated from the
+  // text's length (≈), as far as there was text to go by.
   function localTokens(u: ReturnType<typeof localUsageFor>): string {
-    return u.requests > 0 && !u.tokensReported ? "—" : formatCount(u.tokens);
+    if (u.requests > 0 && !u.tokensReported && u.estimated === 0) return "—";
+    return `${u.estimated > 0 ? "≈" : ""}${formatCount(u.tokens + u.estimated)}`;
   }
 
   // Plan limits, for the CLIs that report them.
@@ -1574,7 +1598,7 @@ export default function Dashboard() {
   const todayUtc = new Date().toISOString().slice(0, 10);
   const usageDays = monthUsage?.days ?? [];
   const peakDay = usageDays.reduce<MonthUsage["days"][number] | null>(
-    (best, d) => (d.totalTokens > (best?.totalTokens ?? 0) ? d : best),
+    (best, d) => (dayTokens(d) > (best ? dayTokens(best) : 0) ? d : best),
     null,
   );
   const monthOptions = monthUsage?.months.includes(usageMonth)
@@ -1584,9 +1608,14 @@ export default function Dashboard() {
   const totalRequestsToday =
     (keys ?? []).reduce((sum, k) => sum + k.requestsToday, 0) +
     (localUsage ?? []).reduce((sum, r) => sum + r.requestsToday, 0);
+  const estimatedTokensToday = (localUsage ?? []).reduce(
+    (sum, r) => sum + r.estimatedPromptTokensToday + r.estimatedCompletionTokensToday,
+    0,
+  );
   const totalTokensToday =
     (keys ?? []).reduce((sum, k) => sum + k.tokensToday, 0) +
-    (localUsage ?? []).reduce((sum, r) => sum + r.tokensToday, 0);
+    (localUsage ?? []).reduce((sum, r) => sum + r.tokensToday, 0) +
+    estimatedTokensToday;
   const totalKeys = new Set((keys ?? []).map((k) => k.keyName)).size;
   const activeTokenCount =
     tokens?.filter((t) => t.status === "active").length ?? 0;
@@ -1641,9 +1670,14 @@ export default function Dashboard() {
             </span>
           </div>
           <div className={styles.statValue}>
+            {estimatedTokensToday > 0 ? "≈" : ""}
             {formatCount(totalTokensToday)}
           </div>
-          <div className={styles.statSub}>Prompt + completion</div>
+          <div className={styles.statSub}>
+            {estimatedTokensToday > 0
+              ? "Prompt + completion, some estimated"
+              : "Prompt + completion"}
+          </div>
         </div>
         <div className={styles.statCard}>
           <div className={styles.statHead}>
@@ -1700,6 +1734,14 @@ export default function Dashboard() {
           day. Saved on the server, so restarts and deploys don&apos;t reset
           it.
         </p>
+        {monthUsage && monthUsage.totals.estimatedTokens > 0 && (
+          <p className={styles.sectionDesc}>
+            ≈ marks tokens estimated from the text&apos;s length (about 4
+            characters a token) for runs that report none: the web chats (ChatGPT,
+            Grok, MiMo), Codex and Gemini CLI. Providers that report their
+            tokens are counted exactly.
+          </p>
+        )}
 
         {!monthUsage ? (
           <p className={styles.empty}>Loading…</p>
@@ -1708,17 +1750,30 @@ export default function Dashboard() {
             <div className={styles.usageSummary}>
               {(
                 [
-                  ["Total tokens", monthUsage.totals.totalTokens],
-                  ["Input tokens", monthUsage.totals.promptTokens],
-                  ["Output tokens", monthUsage.totals.completionTokens],
-                  ["Requests", monthUsage.totals.requests],
+                  [
+                    "Total tokens",
+                    monthUsage.totals.totalTokens + monthUsage.totals.estimatedTokens,
+                    monthUsage.totals.estimatedTokens,
+                  ],
+                  [
+                    "Input tokens",
+                    monthUsage.totals.promptTokens + monthUsage.totals.estimatedPromptTokens,
+                    monthUsage.totals.estimatedPromptTokens,
+                  ],
+                  [
+                    "Output tokens",
+                    monthUsage.totals.completionTokens + monthUsage.totals.estimatedCompletionTokens,
+                    monthUsage.totals.estimatedCompletionTokens,
+                  ],
+                  ["Requests", monthUsage.totals.requests, 0],
                 ] as const
-              ).map(([label, value]) => (
+              ).map(([label, value, estimated]) => (
                 <div key={label} className={styles.usageFigure}>
                   <span
                     className={styles.usageFigureValue}
-                    title={value.toLocaleString()}
+                    title={`${estimated > 0 ? "≈ " : ""}${value.toLocaleString()}`}
                   >
+                    {estimated > 0 ? "≈" : ""}
                     {formatCount(value)}
                   </span>
                   <span className={styles.usageFigureLabel}>{label}</span>
@@ -1730,7 +1785,7 @@ export default function Dashboard() {
               <span>Tokens per day</span>
               <span>
                 {peakDay
-                  ? `Peak ${formatCount(peakDay.totalTokens)} on ${dayLabel(peakDay.day)}`
+                  ? `Peak ${formatCount(dayTokens(peakDay))} on ${dayLabel(peakDay.day)}`
                   : ""}
               </span>
             </div>
@@ -1738,7 +1793,7 @@ export default function Dashboard() {
               {usageDays.map((d) => {
                 const future = d.day > todayUtc;
                 const height = peakDay
-                  ? Math.max((d.totalTokens / peakDay.totalTokens) * 100, 2)
+                  ? Math.max((dayTokens(d) / dayTokens(peakDay)) * 100, 2)
                   : 0;
                 return (
                   <div
@@ -1747,19 +1802,19 @@ export default function Dashboard() {
                     title={
                       future
                         ? dayLabel(d.day)
-                        : `${dayLabel(d.day)}: ${d.totalTokens.toLocaleString()} tokens · ${d.requests.toLocaleString()} request${d.requests === 1 ? "" : "s"}`
+                        : `${dayLabel(d.day)}: ${d.estimatedTokens > 0 ? "≈" : ""}${dayTokens(d).toLocaleString()} tokens · ${d.requests.toLocaleString()} request${d.requests === 1 ? "" : "s"}`
                     }
                   >
                     <div
                       className={`${styles.chartBar} ${
                         future
                           ? styles.chartBarFuture
-                          : d.totalTokens
+                          : dayTokens(d)
                             ? ""
                             : styles.chartBarEmpty
                       } ${d.day === todayUtc ? styles.chartBarToday : ""}`}
                       style={
-                        d.totalTokens ? { height: `${height}%` } : undefined
+                        dayTokens(d) ? { height: `${height}%` } : undefined
                       }
                     />
                   </div>
@@ -1789,8 +1844,10 @@ export default function Dashboard() {
                 </thead>
                 <tbody>
                   {monthUsage.models.map((m) => {
-                    const share = monthUsage.totals.totalTokens
-                      ? (m.totalTokens / monthUsage.totals.totalTokens) * 100
+                    const everything =
+                      monthUsage.totals.totalTokens + monthUsage.totals.estimatedTokens;
+                    const share = everything
+                      ? ((m.totalTokens + m.estimatedTokens) / everything) * 100
                       : 0;
                     return (
                       <tr key={`${m.provider}:${m.model}`}>
@@ -1804,22 +1861,16 @@ export default function Dashboard() {
                         </td>
                         <td>{m.requests.toLocaleString()}</td>
                         <td>
-                          {m.tokensReported
-                            ? m.promptTokens.toLocaleString()
-                            : "—"}
+                          {tokenCell(m.tokensReported, m.promptTokens, m.estimatedPromptTokens)}
                         </td>
                         <td>
-                          {m.tokensReported
-                            ? m.completionTokens.toLocaleString()
-                            : "—"}
+                          {tokenCell(m.tokensReported, m.completionTokens, m.estimatedCompletionTokens)}
                         </td>
                         <td className={styles.strong}>
-                          {m.tokensReported
-                            ? m.totalTokens.toLocaleString()
-                            : "—"}
+                          {tokenCell(m.tokensReported, m.totalTokens, m.estimatedTokens)}
                         </td>
                         <td style={{ minWidth: 160 }}>
-                          {m.tokensReported ? (
+                          {m.tokensReported || m.estimatedTokens > 0 ? (
                             <div className={styles.shareCell}>
                               <div className={styles.shareTrack}>
                                 <div
@@ -2741,9 +2792,9 @@ export default function Dashboard() {
           const lu = localUsageFor(p);
           const details = [
             "requests today",
-            lu.requests > 0 && !lu.tokensReported
+            lu.requests > 0 && !lu.tokensReported && lu.estimated === 0
               ? "tokens not reported"
-              : `${formatCount(lu.tokens)} tokens`,
+              : `${lu.estimated > 0 ? "≈" : ""}${formatCount(lu.tokens + lu.estimated)} tokens`,
             ...(lu.avgDurationMs !== null
               ? [`avg ${(lu.avgDurationMs / 1000).toFixed(1)}s`]
               : []),
@@ -2892,14 +2943,10 @@ export default function Dashboard() {
                     {r.errorsToday.toLocaleString()}
                   </td>
                   <td>
-                    {r.tokensReported
-                      ? r.promptTokensToday.toLocaleString()
-                      : "—"}
+                    {tokenCell(r.tokensReported, r.promptTokensToday, r.estimatedPromptTokensToday)}
                   </td>
                   <td>
-                    {r.tokensReported
-                      ? r.completionTokensToday.toLocaleString()
-                      : "—"}
+                    {tokenCell(r.tokensReported, r.completionTokensToday, r.estimatedCompletionTokensToday)}
                   </td>
                   <td className={styles.dim}>
                     {r.avgDurationMs !== null

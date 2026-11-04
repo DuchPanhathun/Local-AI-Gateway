@@ -369,6 +369,8 @@ export function recordLocalRun(
     durationMs: outcome.durationMs,
     caller: caller?.id,
     textChars: (caller?.promptChars ?? 0) + (outcome.answerChars ?? 0),
+    promptChars: caller?.promptChars,
+    answerChars: outcome.answerChars,
   });
 }
 
@@ -380,6 +382,10 @@ export type LocalUsageSnapshot = {
   promptTokensToday: number;
   completionTokensToday: number;
   tokensToday: number;
+  // Estimated from text length, for runs that reported none (web chats, Codex,
+  // Gemini), on top of the reported counts above.
+  estimatedPromptTokensToday: number;
+  estimatedCompletionTokensToday: number;
   // False when no run today reported tokens (Codex, Gemini): the zeros above
   // then mean "unknown", not "none".
   tokensReported: boolean;
@@ -402,6 +408,8 @@ export function getLocalUsageSnapshot(): LocalUsageSnapshot[] {
       promptTokensToday: m.promptTokens,
       completionTokensToday: m.completionTokens,
       tokensToday: m.totalTokens,
+      estimatedPromptTokensToday: m.estimatedPromptTokens,
+      estimatedCompletionTokensToday: m.estimatedCompletionTokens,
       tokensReported: m.tokensReported,
       avgDurationMs: m.avgDurationMs,
       finishedToday: m.timed,
