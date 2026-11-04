@@ -483,7 +483,7 @@ function finishNote(m: ChatMessage): string | null {
 
 // Parses /api/chat/stream's Server-Sent Events and calls back as text
 // arrives, rather than waiting for the whole response. Every provider uses
-// the same events; only cloud models send `thinking`.
+// the same events; only cloud models and MiMo send `thinking`.
 async function streamChat(
   body: Record<string, unknown>,
   signal: AbortSignal,

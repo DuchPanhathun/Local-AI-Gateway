@@ -348,6 +348,7 @@ export type LocalRunOutcome = {
   usage?: GatewayUsage | null;
   durationMs?: number;
   answerChars?: number; // the answer's length, when there was one
+  thinkingChars?: number; // the reasoning's length, on a streamed run that showed it (MiMo)
 };
 
 // Who made the run, when it was an access token: the key's id, and the
@@ -371,6 +372,8 @@ export function recordLocalRun(
     textChars: (caller?.promptChars ?? 0) + (outcome.answerChars ?? 0),
     promptChars: caller?.promptChars,
     answerChars: outcome.answerChars,
+    // MiMo's only for now: every other provider's estimate stays prompt + answer.
+    thinkingChars: provider === "mimo" ? outcome.thinkingChars : undefined,
   });
 }
 
@@ -435,6 +438,7 @@ export function relayStream(
   const decoder = new TextDecoder();
   const reader = upstream.getReader();
   let outcome: LocalRunOutcome | null = null;
+  let thinkingChars = 0;
   let reported = false;
   const report = (fallback: LocalRunOutcome) => {
     if (reported) return;
@@ -447,6 +451,14 @@ export function relayStream(
     const lines = block.split("\n");
     const name = lines.find((l) => l.startsWith("event:"))?.slice(6).trim();
     const dataLine = lines.find((l) => l.startsWith("data:"));
+    // `done` carries only the answer, so the reasoning is measured on its way past.
+    if (name === "thinking" && dataLine) {
+      try {
+        const { text } = JSON.parse(dataLine.slice(5));
+        if (typeof text === "string") thinkingChars += text.length;
+      } catch {}
+      return block;
+    }
     if ((name !== "done" && name !== "error") || !dataLine) return block;
     if (name === "error") {
       outcome = { status: "error" };
@@ -466,6 +478,7 @@ export function relayStream(
       usage,
       durationMs: typeof data.duration_ms === "number" ? data.duration_ms : undefined,
       answerChars: typeof data.result === "string" ? data.result.length : undefined,
+      thinkingChars,
     };
     return `event: done\ndata: ${JSON.stringify({ ...data, usage: toOpenAIUsage(usage) })}`;
   };

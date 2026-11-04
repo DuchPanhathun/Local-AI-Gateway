@@ -817,7 +817,7 @@ export default function DocumentsPage() {
               head={["Event", "Data", "Meaning"]}
               rows={[
                 [<code key="e">start</code>, <code key="d">{`{"provider"}`}</code>, "The provider has started on the request."],
-                [<code key="e">thinking</code>, <code key="d">{`{"text"}`}</code>, "Reasoning, as it’s generated. Only from cloud models that think before answering (SEA-LION, gpt-oss)."],
+                [<code key="e">thinking</code>, <code key="d">{`{"text"}`}</code>, "Reasoning, as it’s generated. Only from cloud models that think before answering (SEA-LION, gpt-oss) and MiMo on the web."],
                 [<code key="e">delta</code>, <code key="d">{`{"text"}`}</code>, "The next piece of the answer."],
                 [<code key="e">done</code>, <code key="d">{`{"provider", "model", "result", "finish_reason", "usage", "duration_ms"}`}</code>, <>The whole answer is in <code>result</code>. Local CLIs add <code>session_id</code> and leave out <code>finish_reason</code>. Always the last event.</>],
                 [<code key="e">error</code>, <code key="d">{`{"status", "detail", …}`}</code>, <>The request failed after the stream started, with the same fields as an <a href="#errors">error response</a>. Always the last event.</>],
@@ -1000,8 +1000,9 @@ export default function DocumentsPage() {
               <li>
                 For a run that reported nothing but answered in text, the <code>estimated…</code>{" "}
                 fields hold its tokens estimated from the text’s length (about 4 characters a
-                token): the prompt you sent and the answer that came back. They are kept apart from
-                the reported counts and never added to them, so add the two for a total. Failed
+                token): the prompt you sent and the answer that came back, plus on a streamed run
+                any reasoning it showed (MiMo), counted as output. They are kept apart from the
+                reported counts and never added to them, so add the two for a total. Failed
                 requests, empty answers, speech, transcription and images add nothing. The console
                 marks the sums with ≈.
               </li>

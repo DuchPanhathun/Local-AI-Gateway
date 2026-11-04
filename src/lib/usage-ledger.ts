@@ -31,9 +31,11 @@ export type UsageOutcome = {
   textChars?: number;
   // The same lengths apart, for a run that reported no tokens (a web chat,
   // Codex, Gemini): when it gave a text answer, the ledger keeps an estimate
-  // of its tokens, beside the reported ones and marked as an estimate.
+  // of its tokens, beside the reported ones and marked as an estimate. Reasoning
+  // counts as output, as it does in the tokens providers report.
   promptChars?: number;
   answerChars?: number;
+  thinkingChars?: number;
 };
 
 type Counts = {
@@ -209,7 +211,7 @@ export function recordUsageEvent(provider: string, model: string, outcome: Usage
   } else if (outcome.status === "ok" && outcome.answerChars) {
     entry.estimatedRequests += 1;
     entry.estimatedPromptTokens += estimateTokens(outcome.promptChars ?? 0);
-    entry.estimatedCompletionTokens += estimateTokens(outcome.answerChars);
+    entry.estimatedCompletionTokens += estimateTokens(outcome.answerChars + (outcome.thinkingChars ?? 0));
   }
   if (outcome.status === "ok" && typeof outcome.durationMs === "number") {
     entry.durationMs += count(outcome.durationMs);
