@@ -354,6 +354,11 @@ const PAUSE_CURL = `curl -X PATCH "$AI_THUN_URL/api/providers" \\
 
 # → {"paused": ["cerebras"]}`;
 
+const TEST_CURL = `curl -X POST "$AI_THUN_URL/api/providers" \\
+  -H "Authorization: Bearer $APP_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"provider": "groq", "wait": true}'`;
+
 const TOKENS_CURL = `# Create one: 1M tokens and 1,000 requests a month, 20 a minute, until the end
 # of Nov 30 (UTC), Groq and Cerebras only. The key is shown only in this response.
 curl -X POST "$AI_THUN_URL/api/tokens" \\
@@ -1010,6 +1015,7 @@ export default function DocumentsPage() {
           <Section id="providers" title="Pause & resume">
             <Endpoint method="GET" path="/api/providers" owner />
             <Endpoint method="PATCH" path="/api/providers" owner />
+            <Endpoint method="POST" path="/api/providers" owner />
             <p>
               A paused provider turns every request away with <code>503</code>, from the console
               and from access tokens alike, until you resume it. Its keys and CLI sign-in stay as
@@ -1017,6 +1023,44 @@ export default function DocumentsPage() {
               pausing Codex pauses <a href="#images">image generation</a>. You can also do this on
               the console’s Manage page.
             </p>
+            <p>
+              A provider that isn’t set up is held the same way, and can’t be resumed: a cloud API
+              with no API key, a CLI that isn’t installed, or one the gateway says isn’t signed
+              in. Resuming it answers <code>409</code> with the reason. Once it’s set up, it goes
+              by your own pause switch again. If the gateway can’t be reached to ask, nothing is
+              held.
+            </p>
+            <p>
+              Being set up isn’t being able to answer, so each provider is also tested with a real,
+              tiny chat (“Reply with exactly: ok”) when the server starts: a few tokens on a cloud
+              API, a small run on a CLI’s plan. The websites (ChatGPT, Grok, MiMo) aren’t tested at
+              start, because they share one Chrome window and MiMo saves every chat to its history.
+              A provider that fails is held like one that isn’t set up, with the reason, and tried
+              again after 30 seconds, a minute and two minutes in case the gateway was only
+              starting. A real request that fails because of the provider (a refused key, a
+              server error) starts a test too. After that, a held provider waits for you to test it
+              again. A provider at its rate or usage limit still counts as answering. Test chats
+              aren’t counted as traffic and cost no one’s credit.
+            </p>
+            <p>
+              Only an answer is a verdict. If the gateway (or a cloud API) can’t be reached at all,
+              the test says nothing about the provider: it isn’t held, and the Manage page says what
+              couldn’t be reached. To keep a provider out of the automatic tests and out of the
+              holds, for one that’s used with a model the test chat doesn’t use, list it in{" "}
+              <code>PROVIDER_CHECK_SKIP</code> (for example <code>antigravity,groq</code>).
+              Pressing Test on it still shows how the test went.
+            </p>
+            <p>
+              <code>POST /api/providers</code> tests one provider now, which is what the Manage
+              page’s Test button does, and is the way to test a website. It answers{" "}
+              <code>202</code> at once (<code>checks[provider].testing</code> stays{" "}
+              <code>true</code> until it’s over; <code>GET</code> shows when), or with{" "}
+              <code>{`"wait": true`}</code> after the test, which can take a minute or more.
+              Resuming a provider you paused starts a test the same way. Not for a provider that
+              isn’t set up: <code>409</code>. Set <code>PROVIDER_CHECKS=off</code> to turn the
+              test at start off.
+            </p>
+            <CodeBlock code={TEST_CURL} label="Test Groq and wait for the answer" />
             <Fields
               rows={[
                 ["provider", "string", "Which provider to change.", true],
@@ -1025,8 +1069,14 @@ export default function DocumentsPage() {
             />
             <CodeBlock code={PAUSE_CURL} label="Pause Cerebras" />
             <p>
-              Both calls return the providers that are paused now, as{" "}
-              <code>{`{"paused": [...]}`}</code>.
+              These calls return the providers that turn requests away now, as{" "}
+              <code>{`{"paused": [...], "manual": [...], "setup": {...}, "checks": {...}}`}</code>:{" "}
+              <code>paused</code> has every one that does, <code>manual</code> the ones you paused.
+              Each provider’s <code>setup</code> is{" "}
+              <code>{`{"status": "ready" | "no-key" | "not-installed" | "signed-out" | "failing" | "unknown",
+              "reason": "…" | null}`}</code>, <code>failing</code> being a failed test chat. Each{" "}
+              <code>checks</code> entry is <code>{`{"status": "ok" | "failing" | "unverified",
+              "checkedAt", "source": "test" | "traffic", "reason", "limited", "testing"}`}</code>.
             </p>
           </Section>
 

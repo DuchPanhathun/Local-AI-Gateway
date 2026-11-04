@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { transcribeWithGroq } from "@/lib/ai-providers";
 import { recordLocalRun, transcribeOnWeb } from "@/lib/local-agent";
-import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
+import { providerBlock } from "@/lib/provider-setup";
 import { checkAccess, keyRule, refusal, type KeyRule } from "@/lib/auth";
 
 // Whisper on Groq answers in about a second, leaving room for trying every key;
@@ -62,8 +62,9 @@ export async function POST(req: NextRequest) {
   if (provider === "mimo") return transcribeOnMimo(file, incoming, rule);
 
   // Transcription runs on the Groq keys, so pausing Groq pauses it too.
-  if (await isProviderPaused("groq")) {
-    return NextResponse.json({ error: pausedMessage("groq") }, { status: 503, headers: CORS_HEADERS });
+  const blocked = await providerBlock("groq");
+  if (blocked) {
+    return NextResponse.json({ error: blocked }, { status: 503, headers: CORS_HEADERS });
   }
 
   const form = new FormData();
@@ -86,8 +87,9 @@ export async function POST(req: NextRequest) {
 }
 
 async function transcribeOnMimo(file: Blob, incoming: FormData, rule: KeyRule) {
-  if (await isProviderPaused("mimo")) {
-    return NextResponse.json({ error: pausedMessage("mimo") }, { status: 503, headers: CORS_HEADERS });
+  const blocked = await providerBlock("mimo");
+  if (blocked) {
+    return NextResponse.json({ error: blocked }, { status: 503, headers: CORS_HEADERS });
   }
   const model = String(incoming.get("model") || "mimo-v2.5-asr");
   const filename = file instanceof File && file.name ? file.name : undefined;

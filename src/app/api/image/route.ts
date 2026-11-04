@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { image as generateImage, recordLocalRun } from "@/lib/local-agent";
-import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
+import { providerBlock } from "@/lib/provider-setup";
 import { checkAccess, keyRule, refusal } from "@/lib/auth";
 
 // Codex's image_gen tool reports ~75s per image; give it headroom.
@@ -52,11 +52,9 @@ export async function POST(req: NextRequest) {
   }
   const caller = { id: rule.caller, promptChars: payload.prompt.length };
 
-  if (await isProviderPaused("codex")) {
-    return NextResponse.json(
-      { error: pausedMessage("codex") },
-      { status: 503, headers: CORS_HEADERS }
-    );
+  const blocked = await providerBlock("codex");
+  if (blocked) {
+    return NextResponse.json({ error: blocked }, { status: 503, headers: CORS_HEADERS });
   }
   const model = typeof payload.model === "string" && payload.model ? payload.model : undefined;
 

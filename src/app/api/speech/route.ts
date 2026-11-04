@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { recordLocalRun, speech, voices, type SpeechRequest } from "@/lib/local-agent";
-import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
+import { providerBlock } from "@/lib/provider-setup";
 import { checkAccess, keyRule, refusal } from "@/lib/auth";
 
 // MiMo's TTS page takes 5–15 s; a recording to copy has to upload first.
@@ -52,8 +52,9 @@ export async function POST(req: NextRequest) {
   // Speech counts as requests: its text isn't charged as tokens.
   const caller = { id: rule.caller };
 
-  if (await isProviderPaused("mimo")) {
-    return NextResponse.json({ error: pausedMessage("mimo") }, { status: 503, headers: CORS_HEADERS });
+  const blocked = await providerBlock("mimo");
+  if (blocked) {
+    return NextResponse.json({ error: blocked }, { status: 503, headers: CORS_HEADERS });
   }
   const { response_format: format, ...request } = payload;
   const model = typeof request.model === "string" && request.model ? request.model : "mimo-v2.5-tts";

@@ -12,8 +12,9 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase-browser";
-import { ApiKeys, type KeySummary } from "./api-keys";
+import { ago, ApiKeys, type KeySummary } from "./api-keys";
 import { Codes } from "./codes";
+import { ExtensionDownload } from "./extension";
 import { Icon, type IconName } from "./icons";
 import { Logo } from "./logo";
 import styles from "./page.module.css";
@@ -151,6 +152,30 @@ const CUSTOM_MODEL = "__custom__";
 // The Provider list's first choice: the Model list shows every provider's.
 const ALL_PROVIDERS = "__all__";
 
+// Whether a provider is set up to answer, from /api/quotas: one that isn't is
+// held like a paused one, and can't be resumed until it is.
+type SetupStatus = "ready" | "no-key" | "not-installed" | "signed-out" | "failing" | "unknown";
+type ProviderSetup = { status: SetupStatus; reason: string | null };
+
+const SETUP_LABELS: Partial<Record<SetupStatus, string>> = {
+  "no-key": "No API key",
+  "not-installed": "Not installed",
+  "signed-out": "Not signed in",
+  failing: "Not responding", // its test chat failed
+};
+
+// What the test chats and real requests have shown about a provider, from
+// /api/providers: it answered, or its last test chat failed.
+type CheckInfo = {
+  status: "ok" | "failing" | "unverified";
+  checkedAt: string | null;
+  source: "test" | "traffic" | null;
+  reason: string | null;
+  limited: boolean;
+  testing: boolean;
+  skipped: boolean; // PROVIDER_CHECK_SKIP: never tested by itself or held by a test
+};
+
 type ProviderModels = {
   kind: "cloud" | "local";
   default: string | null;
@@ -199,7 +224,7 @@ type SavedChat = SavedChatSummary & {
   messages: ChatMessage[];
 };
 
-type View = "dashboard" | "playground" | "api-keys" | "users" | "codes" | "shop" | "analytics" | "manage";
+type View = "dashboard" | "playground" | "api-keys" | "users" | "codes" | "shop" | "analytics" | "manage" | "extension";
 type PlaygroundMode = "chat" | SpeechMode;
 
 // ---------------------------------------------------------------------------
@@ -269,6 +294,13 @@ const NAV_ITEMS: {
     icon: "manage",
     description:
       "Pause or resume providers, the API reference, and the coding CLIs installed on this machine.",
+  },
+  {
+    id: "extension",
+    label: "VS Code extension",
+    icon: "download",
+    description:
+      "Download the Thun Murex extension for VS Code, install it, and connect it to this gateway.",
   },
 ];
 
@@ -633,6 +665,10 @@ export default function Dashboard() {
   const [keys, setKeys] = useState<KeyUsage[] | null>(null);
   const [localUsage, setLocalUsage] = useState<LocalUsage[] | null>(null);
   const [paused, setPaused] = useState<string[]>([]);
+  const [setup, setSetup] = useState<Record<string, ProviderSetup>>({});
+  const [manualPaused, setManualPaused] = useState<string[]>([]);
+  const [checks, setChecks] = useState<Record<string, CheckInfo>>({});
+  const [testingNow, setTestingNow] = useState<string | null>(null);
   const [pauseBusy, setPauseBusy] = useState<string | null>(null);
   const [pauseError, setPauseError] = useState<string | null>(null);
   const [usageMonth, setUsageMonth] = useState(() =>
@@ -708,6 +744,9 @@ export default function Dashboard() {
       setKeys(data.keys);
       setLocalUsage(data.local ?? []);
       setPaused(data.paused ?? []);
+      setManualPaused(data.manual ?? []);
+      setSetup(data.setup ?? {});
+      setChecks(data.checks ?? {});
       setGeneratedAt(data.generatedAt);
       setError(null);
     } catch {
@@ -862,6 +901,54 @@ export default function Dashboard() {
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
   }, [chatMessages, chatStreaming, chatStreamingThinking]);
 
+  // A test chat runs on the server, for seconds, or up to a minute or two for a
+  // website: look in every couple of seconds until it's over.
+  async function waitForCheck(p: string) {
+    for (let i = 0; i < 100; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      try {
+        const res = await fetch("/api/providers", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        setPaused(data.paused ?? []);
+        setManualPaused(data.manual ?? []);
+        setSetup(data.setup ?? {});
+        setChecks(data.checks ?? {});
+        if (!data.checks?.[p]?.testing) return;
+      } catch {
+        return;
+      }
+    }
+  }
+
+  async function handleTest(p: ChatProvider) {
+    if (!signedIn) return;
+    setTestingNow(p);
+    setPauseError(null);
+    try {
+      const res = await fetch("/api/providers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: p }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setPauseError(data?.error || `Failed (HTTP ${res.status})`);
+        return;
+      }
+      setPaused(data.paused ?? []);
+      setManualPaused(data.manual ?? []);
+      setSetup(data.setup ?? {});
+      setChecks(data.checks ?? {});
+      await waitForCheck(p);
+      await loadModels(); // a provider that was held may be listed again
+    } catch {
+      setPauseError("Network error reaching /api/providers");
+    } finally {
+      setTestingNow(null);
+    }
+  }
+
   async function handleTogglePause(p: ChatProvider, pause: boolean) {
     if (!signedIn) return;
     setPauseBusy(p);
@@ -878,8 +965,13 @@ export default function Dashboard() {
         return;
       }
       setPaused(data.paused);
+      setManualPaused(data.manual ?? []);
+      setSetup(data.setup ?? {});
+      setChecks(data.checks ?? {});
       // A paused cloud provider's model list isn't fetched; get it now.
       if (!pause) await loadModels();
+      // Resuming starts a test chat, which can hold the provider again.
+      if (!pause && data.checks?.[p]?.testing) void waitForCheck(p);
     } catch {
       setPauseError("Network error reaching /api/providers");
     } finally {
@@ -1143,6 +1235,9 @@ export default function Dashboard() {
     setLocalUsage(null);
     setMonthUsage(null);
     setPaused([]);
+    setManualPaused([]);
+    setSetup({});
+    setChecks({});
     setPauseError(null);
     setTokens(null);
     setLocalAgent(null);
@@ -1414,6 +1509,47 @@ export default function Dashboard() {
   }
 
   const isPaused = (p: string) => paused.includes(p);
+  // Why a provider can't answer whatever the owner chooses: no API key, CLI
+  // not installed or not signed in. Null when it's set up, or can't be told.
+  const setupBlock = (p: string) => {
+    const s = setup[p];
+    return s && SETUP_LABELS[s.status] ? s : null;
+  };
+  const notResponding = (p: string) => setup[p]?.status === "failing";
+  const heldNote = (p: string) =>
+    !isPaused(p)
+      ? ""
+      : notResponding(p)
+        ? " (not responding)"
+        : setupBlock(p)
+          ? " (not set up)"
+          : " (paused)";
+  // What to say after a provider's name when it can't answer.
+  const heldPhrase = (p: string) => {
+    const s = setupBlock(p);
+    return s
+      ? `${notResponding(p) ? "isn't responding" : "isn't set up"}: ${s.reason}`
+      : "is paused.";
+  };
+  const allProviders = [...CLOUD_PROVIDERS, ...LOCAL_PROVIDERS];
+  const notRespondingCount = allProviders.filter(notResponding).length;
+  const notSetUpCount =
+    allProviders.filter((p) => setupBlock(p)).length - notRespondingCount;
+  // What the Manage table says under a working provider's status.
+  const checkNote = (p: string): string | null => {
+    const c = checks[p];
+    if (testingNow === p || c?.testing) return "Testing…";
+    if (!c) return "Not tested yet"; // before the first answer arrives
+    if (c.status === "failing") {
+      return `Last test chat failed: ${c.reason ?? "no answer"}${c.skipped ? " (not held: skipped by PROVIDER_CHECK_SKIP)" : ""}`;
+    }
+    if (c.status === "unverified") {
+      if (c.reason) return `Couldn't test: ${c.reason}`;
+      return c.skipped ? "Not tested: skipped by PROVIDER_CHECK_SKIP" : "Not tested yet";
+    }
+    const when = ago(c.checkedAt, generatedAt ? Date.parse(generatedAt) : 0);
+    return `${c.source === "traffic" ? "Answered a real request" : "Test chat passed"} · ${when}${c.limited ? " · at its limit" : ""}`;
+  };
 
   // Monthly report on the Dashboard. Usage days are UTC.
   const todayUtc = new Date().toISOString().slice(0, 10);
@@ -1447,6 +1583,7 @@ export default function Dashboard() {
   const speechShown = view === "playground" && playgroundMode !== "chat";
   const chatIsCloud = isCloudProvider(chatProvider);
   const chatPaused = isPaused(chatProvider);
+  const chatSetupBlock = setupBlock(chatProvider);
   const chatLabel = PROVIDER_LABELS[chatProvider];
   const providerModels = models?.[chatProvider];
   const effectiveModel =
@@ -1704,7 +1841,13 @@ export default function Dashboard() {
           const u = usageFor(p);
           const m = models?.[p];
           const off = isPaused(p);
-          const status = off
+          const unset = setupBlock(p);
+          const status = unset
+            ? {
+                label: SETUP_LABELS[unset.status] ?? "Not set up",
+                cls: styles.badgeWarning,
+              }
+            : off
             ? { label: "Paused", cls: styles.badgeWarning }
             : u.keys === 0
               ? { label: "No keys", cls: styles.badgeDanger }
@@ -1790,7 +1933,13 @@ export default function Dashboard() {
           const lu = localUsageFor(p);
           const off = isPaused(p);
           const tight = tightestLimit(p);
-          const status = off
+          const unset = setupBlock(p);
+          const status = unset
+            ? {
+                label: SETUP_LABELS[unset.status] ?? "Not set up",
+                cls: styles.badgeWarning,
+              }
+            : off
             ? { label: "Paused", cls: styles.badgeWarning }
             : localAgentError || h?.error
               ? { label: "Gateway down", cls: styles.badgeDanger }
@@ -2117,13 +2266,18 @@ export default function Dashboard() {
         >
           {chatPaused && (
             <div className={styles.notice}>
-              <span>{chatLabel} is paused.</span>
+              <span>
+                {`${chatLabel} ${heldPhrase(chatProvider)}`}
+              </span>
               <button
                 type="button"
                 className={styles.linkButton}
                 onClick={() => setView("manage")}
               >
-                Resume it on the Manage page <Icon name="arrow" />
+                {chatSetupBlock
+                  ? "See the Manage page"
+                  : "Resume it on the Manage page"}{" "}
+                <Icon name="arrow" />
               </button>
             </div>
           )}
@@ -2188,14 +2342,14 @@ export default function Dashboard() {
               <optgroup label="Cloud APIs">
                 {CLOUD_PROVIDERS.map((p) => (
                   <option key={p} value={p} disabled={isPaused(p)}>
-                    {`${PROVIDER_LABELS[p]}${isPaused(p) ? " (paused)" : ""}`}
+                    {`${PROVIDER_LABELS[p]}${heldNote(p)}`}
                   </option>
                 ))}
               </optgroup>
               <optgroup label="Local agent CLIs">
                 {LOCAL_PROVIDERS.map((p) => (
                   <option key={p} value={p} disabled={isPaused(p)}>
-                    {`${PROVIDER_LABELS[p]}${isPaused(p) ? " (paused)" : ""}`}
+                    {`${PROVIDER_LABELS[p]}${heldNote(p)}`}
                   </option>
                 ))}
               </optgroup>
@@ -2231,7 +2385,7 @@ export default function Dashboard() {
                   list.length > 0 && (
                     <optgroup
                       key={p}
-                      label={`${label}${isPaused(p) ? " (paused)" : ""}`}
+                      label={`${label}${heldNote(p)}`}
                     >
                       {list.map((m) => (
                         <option
@@ -2764,13 +2918,22 @@ export default function Dashboard() {
           <span className={styles.badge}>
             {CLOUD_PROVIDERS.length + LOCAL_PROVIDERS.length - paused.length}{" "}
             active
-            {paused.length > 0 ? ` · ${paused.length} paused` : ""}
+            {paused.length > notSetUpCount + notRespondingCount
+              ? ` · ${paused.length - notSetUpCount - notRespondingCount} paused`
+              : ""}
+            {notSetUpCount > 0 ? ` · ${notSetUpCount} not set up` : ""}
+            {notRespondingCount > 0 ? ` · ${notRespondingCount} not responding` : ""}
           </span>
         </div>
         <p className={styles.sectionDesc}>
           Pausing a provider stops all traffic to it until you resume it, from
           the Playground and from apps using your access tokens alike: requests
-          get HTTP 503. Its keys and CLI login stay as they are.
+          get HTTP 503. Its keys and CLI login stay as they are. A provider with
+          no API key, no CLI installed or no sign-in is held automatically and
+          can&apos;t be resumed until it&apos;s set up. Each provider is also
+          tested with a real, tiny chat when the server starts (the websites
+          only when you press Test), and one that doesn&apos;t answer is held
+          until a test passes: fix it, then press Test again.
         </p>
 
         {pauseError && (
@@ -2792,6 +2955,10 @@ export default function Dashboard() {
             <tbody>
               {[...CLOUD_PROVIDERS, ...LOCAL_PROVIDERS].map((p) => {
                 const off = isPaused(p);
+                const unset = setupBlock(p);
+                const failing = notResponding(p);
+                const testing = testingNow === p || !!checks[p]?.testing;
+                const note = unset ? null : checkNote(p);
                 return (
                   <tr key={p}>
                     <td>
@@ -2809,19 +2976,56 @@ export default function Dashboard() {
                           off ? styles.badgeWarning : styles.badgeSuccess
                         }`}
                       >
-                        {off ? "Paused" : "Active"}
+                        {unset
+                          ? (SETUP_LABELS[unset.status] ?? "Not set up")
+                          : off
+                            ? "Paused"
+                            : "Active"}
                       </span>
+                      {unset?.reason && (
+                        <div className={styles.cellNote}>{unset.reason}</div>
+                      )}
+                      {note && <div className={styles.cellNote}>{note}</div>}
+                      {failing && testing && (
+                        <div className={styles.cellNote}>Testing…</div>
+                      )}
                     </td>
                     <td style={{ textAlign: "right" }}>
-                      <button
-                        type="button"
-                        className={styles.buttonGhost}
-                        disabled={pauseBusy !== null}
-                        onClick={() => handleTogglePause(p, !off)}
-                      >
-                        <Icon name={off ? "play" : "pause"} />
-                        {pauseBusy === p ? "Saving…" : off ? "Resume" : "Pause"}
-                      </button>
+                      <div className={styles.rowActions}>
+                        <button
+                          type="button"
+                          className={styles.buttonGhost}
+                          disabled={
+                            pauseBusy !== null ||
+                            (!!unset && !(failing && manualPaused.includes(p)))
+                          }
+                          title={unset?.reason ?? undefined}
+                          onClick={() => handleTogglePause(p, !off)}
+                        >
+                          <Icon name={off ? "play" : "pause"} />
+                          {pauseBusy === p ? "Saving…" : off ? "Resume" : "Pause"}
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.buttonGhost}
+                          disabled={
+                            testingNow !== null ||
+                            testing ||
+                            (!!unset && !failing)
+                          }
+                          title={
+                            isWebProvider(p)
+                              ? "Sends a tiny chat through the gateway's Chrome window"
+                              : isCloudProvider(p)
+                                ? "Sends a tiny chat, a few tokens"
+                                : "Runs a tiny chat on the CLI's plan"
+                          }
+                          onClick={() => handleTest(p)}
+                        >
+                          <Icon name="activity" />
+                          {testing ? "Testing…" : failing ? "Test again" : "Test"}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -3172,6 +3376,17 @@ export default function Dashboard() {
             mode={playgroundMode === "chat" ? "transcribe" : playgroundMode}
             active={speechShown}
             paused={paused}
+            unavailable={Object.fromEntries(
+              Object.keys(setup)
+                .filter((p) => setupBlock(p))
+                .map((p) => [
+                  p,
+                  {
+                    note: notResponding(p) ? " (not responding)" : " (not set up)",
+                    phrase: heldPhrase(p),
+                  },
+                ]),
+            )}
             onModeChange={setPlaygroundMode}
             onManage={() => setView("manage")}
           />
@@ -3182,6 +3397,9 @@ export default function Dashboard() {
         {view === "shop" && <Shop providers={PROVIDER_OPTIONS} />}
         {view === "analytics" && analyticsView}
         {view === "manage" && manageView}
+        {view === "extension" && (
+          <ExtensionDownload onOpenKeys={() => setView("api-keys")} />
+        )}
       </main>
     </div>
   );

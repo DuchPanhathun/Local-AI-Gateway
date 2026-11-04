@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { defaultModel, listModels, PROVIDER_IDS } from "@/lib/ai-providers";
 import { LOCAL_AGENT_PROVIDER_IDS, models as localAgentModels } from "@/lib/local-agent";
-import { getPausedProviders } from "@/lib/provider-state";
+import { getProviderState } from "@/lib/provider-setup";
 import { checkAccess, keyRule, refusal } from "@/lib/auth";
 
 const CORS_HEADERS = {
@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
   const access = await checkAccess(req, "app");
   if (!access.ok) return refusal(access, CORS_HEADERS);
 
-  const paused = new Set(await getPausedProviders());
+  const paused = new Set((await getProviderState()).paused);
   const [cloud, local] = await Promise.all([
     // A paused cloud provider isn't asked for its list at all.
     Promise.all(

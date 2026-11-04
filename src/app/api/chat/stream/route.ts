@@ -8,7 +8,8 @@ import {
   recordLocalRun,
   relayStream,
 } from "@/lib/local-agent";
-import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
+import { noteChatOutcome } from "@/lib/provider-check";
+import { providerBlock } from "@/lib/provider-setup";
 import { bodyRetryAfter, RateLimitedError, retryAfterHeaders } from "@/lib/rate-limits";
 import { checkAccess, keyRule, refusal } from "@/lib/auth";
 import { withKeepAlive } from "@/lib/sse";
@@ -97,11 +98,9 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  if (await isProviderPaused(providerId)) {
-    return NextResponse.json(
-      { error: pausedMessage(providerId) },
-      { status: 503, headers: CORS_HEADERS }
-    );
+  const blocked = await providerBlock(providerId);
+  if (blocked) {
+    return NextResponse.json({ error: blocked }, { status: 503, headers: CORS_HEADERS });
   }
 
   if (isLocalAgentProviderId(providerId)) {
@@ -139,6 +138,7 @@ export async function POST(req: NextRequest) {
 
       if (!upstream.ok || !upstream.body) {
         // Failures before the stream opens (401/400/403/429) are ordinary JSON errors.
+        noteChatOutcome(providerId, upstream.status);
         recordLocalRun(providerId, model, { status: "error" }, caller);
         const data = await upstream.json().catch(() => ({ error: "Upstream request failed" }));
         const headers = { ...CORS_HEADERS, ...retryAfterHeaders(bodyRetryAfter(data)) };
@@ -146,6 +146,7 @@ export async function POST(req: NextRequest) {
       }
 
       const stream = relayStream(upstream.body, req.signal, async (outcome) => {
+        if (outcome.status !== "stopped") noteChatOutcome(providerId, outcome.status === "ok" ? 200 : 502);
         recordLocalRun(providerId, model, outcome, caller);
         if (outcome.status === "ok" && account && userCredit > 0) {
           const promptTokens = outcome.usage?.input_tokens ?? estimateTokens(prompt.length);
@@ -161,6 +162,7 @@ export async function POST(req: NextRequest) {
       });
       return new NextResponse(withKeepAlive(stream), { status: upstream.status, headers: SSE_HEADERS });
     } catch (err) {
+      if (!req.signal.aborted) noteChatOutcome(providerId, 502);
       recordLocalRun(providerId, model, { status: req.signal.aborted ? "stopped" : "error" }, caller);
       return NextResponse.json(
         { error: err instanceof Error ? err.message : "local-agent-gateway request failed" },
@@ -210,6 +212,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const result = await streamProvider(providerId, { messages, ...rest }, req.signal, rule.caller);
+    noteChatOutcome(providerId, result.ok ? 200 : result.status);
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status, headers: CORS_HEADERS });
     }
@@ -221,6 +224,7 @@ export async function POST(req: NextRequest) {
         { status: 429, headers: { ...CORS_HEADERS, ...retryAfterHeaders(err.retryAfter) } }
       );
     }
+    if (!req.signal.aborted) noteChatOutcome(providerId, 502);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Upstream request failed" },
       { status: 502, headers: CORS_HEADERS }

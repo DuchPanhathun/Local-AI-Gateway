@@ -73,12 +73,18 @@ function chatgptWebGateway(): Gateway {
   };
 }
 
-function isWebChat(provider: LocalAgentProviderId): boolean {
+export function isWebChat(provider: LocalAgentProviderId): boolean {
   return chatgptWebGateway().providers.includes(provider);
 }
 
 function gatewayFor(provider: LocalAgentProviderId): Gateway {
   return isWebChat(provider) ? chatgptWebGateway() : localAgentGateway();
+}
+
+// "local-agent-gateway at http://127.0.0.1:8787": which gateway serves a provider, and where.
+export function gatewayAddress(provider: LocalAgentProviderId): string {
+  const gateway = gatewayFor(provider);
+  return `${gateway.name} at ${gateway.url}`;
 }
 
 function authHeaders(gateway: Gateway, extra?: Record<string, string>): Record<string, string> {
@@ -119,12 +125,13 @@ function askBody(req: AskRequest): string {
 // the undici version built into Node, so the two cannot disagree.
 const patient = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
 
-export async function ask(req: AskRequest): Promise<GatewayCallResult> {
+export async function ask(req: AskRequest, signal?: AbortSignal): Promise<GatewayCallResult> {
   const gateway = gatewayFor(req.provider);
   const res = await undiciFetch(`${gateway.url}/ask`, {
     method: "POST",
     headers: authHeaders(gateway, { "Content-Type": "application/json" }),
     body: askBody(req),
+    signal,
     dispatcher: patient,
   });
   return { status: res.status, data: await res.json() };
@@ -256,6 +263,12 @@ async function fromBoth(path: string): Promise<GatewayCallResult> {
 
 export async function health(): Promise<GatewayCallResult> {
   return fromBoth("/health");
+}
+
+// Whether each CLI is signed in, as local-agent-gateway asks the CLIs themselves
+// (its GET /auth). A gateway without that endpoint answers 404: no sign-in news.
+export async function auth(): Promise<GatewayCallResult> {
+  return getFrom(localAgentGateway(), "/auth");
 }
 
 export async function models(): Promise<GatewayCallResult> {

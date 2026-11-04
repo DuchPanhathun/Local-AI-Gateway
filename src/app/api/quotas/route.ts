@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUsageSnapshot } from "@/lib/ai-providers";
 import { getLocalUsageSnapshot } from "@/lib/local-agent";
-import { getPausedProviders } from "@/lib/provider-state";
+import { getProviderState } from "@/lib/provider-setup";
 import { checkAccess, refusal } from "@/lib/auth";
 
 const CORS_HEADERS = {
@@ -16,7 +16,7 @@ export function OPTIONS() {
 
 // Today's usage: `keys` per cloud API key (every configured key, used or
 // not), `local` per local CLI and model (only those used today), plus which
-// providers are paused.
+// providers are paused (or not set up) and the `setup` of each.
 export async function GET(req: NextRequest) {
   const access = await checkAccess(req, "owner");
   if (!access.ok) return refusal(access, CORS_HEADERS);
@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
     {
       keys: getUsageSnapshot(),
       local: getLocalUsageSnapshot(),
-      paused: await getPausedProviders(),
+      ...(await getProviderState()),
       generatedAt: new Date().toISOString(),
     },
     { headers: CORS_HEADERS }

@@ -9,7 +9,8 @@ import {
   recordLocalRun,
   type GatewayUsage,
 } from "@/lib/local-agent";
-import { isProviderPaused, pausedMessage } from "@/lib/provider-state";
+import { noteChatOutcome } from "@/lib/provider-check";
+import { providerBlock } from "@/lib/provider-setup";
 import { bodyRetryAfter, RateLimitedError, retryAfterHeaders } from "@/lib/rate-limits";
 import { checkAccess, keyRule, refusal } from "@/lib/auth";
 import { estimateTokens, getAccount, getAccountCredit, usedInPeriod } from "@/lib/api-tokens";
@@ -93,11 +94,9 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  if (await isProviderPaused(providerId)) {
-    return NextResponse.json(
-      { error: pausedMessage(providerId) },
-      { status: 503, headers: CORS_HEADERS }
-    );
+  const blocked = await providerBlock(providerId);
+  if (blocked) {
+    return NextResponse.json({ error: blocked }, { status: 503, headers: CORS_HEADERS });
   }
 
   if (isLocalAgentProviderId(providerId)) {
@@ -127,6 +126,7 @@ export async function POST(req: NextRequest) {
             : {}),
         ...(payload.temporary !== undefined ? { temporary: Boolean(payload.temporary) } : {}),
       });
+      noteChatOutcome(providerId, status);
       const ok = status >= 200 && status < 300;
       const run = data as {
         model?: string | null;
@@ -164,6 +164,7 @@ export async function POST(req: NextRequest) {
       const headers = { ...CORS_HEADERS, ...retryAfterHeaders(ok ? undefined : bodyRetryAfter(data)) };
       return NextResponse.json(body, { status, headers });
     } catch (err) {
+      noteChatOutcome(providerId, 502);
       recordLocalRun(providerId, model, { status: "error" }, caller);
       return NextResponse.json(
         { error: err instanceof Error ? err.message : "local-agent-gateway request failed" },
@@ -203,6 +204,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const { status, data } = await callProvider(providerId, { messages, ...rest }, rule.caller);
+    noteChatOutcome(providerId, status);
     if (status >= 200 && status < 300 && account && userCredit > 0) {
       const u = (data as { usage?: { prompt_tokens?: number; completion_tokens?: number } })?.usage;
       const answer = (data as { choices?: { message?: { content?: unknown } }[] })?.choices?.[0]?.message?.content;
@@ -221,6 +223,7 @@ export async function POST(req: NextRequest) {
         { status: 429, headers: { ...CORS_HEADERS, ...retryAfterHeaders(err.retryAfter) } }
       );
     }
+    noteChatOutcome(providerId, 502);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Upstream request failed" },
       { status: 502, headers: CORS_HEADERS }

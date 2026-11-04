@@ -131,12 +131,14 @@ export function SpeechPlayground({
   mode,
   active,
   paused,
+  unavailable,
   onModeChange,
   onManage,
 }: {
   mode: SpeechMode;
   active: boolean;
   paused: string[];
+  unavailable: Record<string, { note: string; phrase: string }>; // provider → why it can't answer, when it's set up wrong or not responding
   onModeChange: (mode: SpeechMode) => void;
   onManage: () => void;
 }) {
@@ -379,11 +381,13 @@ export function SpeechPlayground({
     onModeChange("transcribe");
   }
 
-  const pausedNotice = (name: string) => (
+  const heldNote = (id: string) => (!paused.includes(id) ? "" : (unavailable[id]?.note ?? " (paused)"));
+
+  const pausedNotice = (name: string, id: string) => (
     <div className={styles.notice}>
-      <span>{name} is paused.</span>
+      <span>{unavailable[id] ? `${name} ${unavailable[id].phrase}` : `${name} is paused.`}</span>
       <button type="button" className={styles.linkButton} onClick={onManage}>
-        Resume it on the Manage page <Icon name="arrow" />
+        {unavailable[id] ? "See the Manage page" : "Resume it on the Manage page"} <Icon name="arrow" />
       </button>
     </div>
   );
@@ -466,7 +470,7 @@ export function SpeechPlayground({
       </div>
 
       <div className={styles.composer}>
-        {providerPaused && pausedNotice(PROVIDER_NAMES[provider])}
+        {providerPaused && pausedNotice(PROVIDER_NAMES[provider], provider)}
         {clipError && (
           <div className={styles.alert} style={{ marginBottom: 10 }}>
             {clipError}
@@ -552,10 +556,10 @@ export function SpeechPlayground({
             onChange={(e) => setProvider(e.target.value as Provider)}
           >
             <option value="groq" disabled={paused.includes("groq")}>
-              {`Groq · Whisper${paused.includes("groq") ? " (paused)" : ""}`}
+              {`Groq · Whisper${heldNote("groq")}`}
             </option>
             <option value="mimo" disabled={mimoPaused}>
-              {`MiMo · MiMo-V2.5-ASR${mimoPaused ? " (paused)" : ""}`}
+              {`MiMo · MiMo-V2.5-ASR${heldNote("mimo")}`}
             </option>
           </select>
         </div>
@@ -757,7 +761,7 @@ export function SpeechPlayground({
           }
         }}
       >
-        {mimoPaused && pausedNotice("MiMo")}
+        {mimoPaused && pausedNotice("MiMo", "mimo")}
         <div className={styles.composerBox}>
           <textarea
             className={styles.chatTextarea}

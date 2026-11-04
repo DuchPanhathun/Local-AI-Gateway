@@ -58,6 +58,17 @@ export function defaultModel(providerId: ProviderId): string {
   return PROVIDERS[providerId].defaultModel;
 }
 
+// Where the provider's API is, for saying what couldn't be reached.
+export function providerHost(providerId: ProviderId): string {
+  return new URL(PROVIDERS[providerId].baseUrl).host;
+}
+
+// How many API keys are set for a provider, and what to name the first one.
+export function keySetup(providerId: ProviderId): { count: number; envName: string } {
+  const { keyEnvPrefix } = PROVIDERS[providerId];
+  return { count: collectKeys(keyEnvPrefix).length, envName: `${keyEnvPrefix}1` };
+}
+
 // Published quota reference, for the dashboard only — not enforced here
 // (enforcement is the 429-retry + Groq daily-limit skip below). SEA-LION and
 // Groq limits are uniform across models ("*"); Cerebras varies per model.
@@ -128,7 +139,8 @@ function recordUsage(
   providerId: ProviderId,
   keyName: string,
   model: string,
-  outcome: UsageOutcome
+  outcome: UsageOutcome,
+  silent = false
 ): void {
   const now = Date.now();
   const u = outcome.usage;
@@ -140,7 +152,9 @@ function recordUsage(
   list.push({ ts: now, tokens });
   recent.set(mapKey, list.slice(-500));
 
-  recordUsageEvent(providerId, model, { ...outcome, keyName });
+  // A test chat (see provider-check.ts) counts toward the key's rate limit above,
+  // but not as traffic in the ledger: it's not a request anyone made.
+  if (!silent) recordUsageEvent(providerId, model, { ...outcome, keyName });
 }
 
 // How much text is in an OpenAI-style message list, for estimating a caller's
@@ -177,11 +191,13 @@ function collectKeys(prefix: string): { name: string; key: string }[] {
 
 export type ProviderCallResult = { status: number; data: unknown };
 
-// `caller`: the access token's id, when one made the request.
+// `caller`: the access token's id, when one made the request. `silent`: for a
+// test chat, which isn't recorded as traffic.
 export async function callProvider(
   providerId: ProviderId,
   body: Record<string, unknown>,
-  caller?: string
+  caller?: string,
+  { silent = false }: { silent?: boolean } = {}
 ): Promise<ProviderCallResult> {
   const config = PROVIDERS[providerId];
   const keys = collectKeys(config.keyEnvPrefix);
@@ -242,7 +258,7 @@ export async function callProvider(
       durationMs: Date.now() - startedAt,
       caller,
       textChars: messageChars(body.messages) + (typeof answer === "string" ? answer.length : 0),
-    });
+    }, silent);
 
     cursors.set(providerId, cursor);
     return { status: res.status, data };

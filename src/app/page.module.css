@@ -1166,6 +1166,12 @@
   width: 110px;
 }
 
+/* A row's Pause/Resume and Test buttons. */
+.rowActions {
+  display: inline-flex;
+  gap: 8px;
+}
+
 .cellNote {
   font-size: 0.72rem;
   color: var(--text-dim);
