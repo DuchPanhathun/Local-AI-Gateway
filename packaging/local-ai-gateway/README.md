@@ -13,10 +13,15 @@ your browser, already signed in. Press Ctrl+C in the terminal to stop everything
 
 ## What you need
 
-- **Node 20+** and **Python 3.11+** (the gateways are Python), on **Linux or macOS**.
+- **Node 20+** and **Python 3.11+** (the gateways are Python), on **Linux, macOS or Windows 10/11**.
+  - macOS: `brew install python`, or the installer from python.org. The `python3` that comes with
+    the system is too old.
+  - Windows: the installer from python.org (tick "Add python.exe to PATH"), or
+    `winget install Python.Python.3.13`. The `py` launcher it installs is how this finds it.
 - The tools you want to use, installed and **signed in the way their makers describe**. This
   doesn't install them or log you in; it finds them on your `PATH`. The ones it doesn't find show
-  as "Not installed" in the console.
+  as "Not installed" in the console. (On Windows that includes the ones npm installs, such as Codex
+  and Gemini CLI, and Claude Code's own `claude.exe`.)
 - For the websites only: Google Chrome (or Chromium).
 
 ## What it does
@@ -30,13 +35,14 @@ It starts three things, all listening on `127.0.0.1` only (no other computer can
 | a gateway for websites | (only with `--web`) types into ChatGPT, Grok and MiMo in its own Chrome window |
 
 The console's key is made on your computer on the first run and kept in `~/.local-ai-gateway`
-(readable only by you). `npx local-ai-gateway key` shows the link and the key again.
+(on Windows, `%USERPROFILE%\.local-ai-gateway`), readable only by you. `npx local-ai-gateway key`
+shows the link and the key again.
 
 ## Commands
 
 ```bash
 npx local-ai-gateway                 # start (sets up on the first run)
-npx local-ai-gateway --allow ~/code  # let the CLIs work in ~/code too (remembered)
+npx local-ai-gateway --allow ~/code  # let the CLIs work in ~/code too (remembered); Windows: --allow C:\code
 npx local-ai-gateway --web           # also run the ChatGPT / Grok / MiMo gateway
 npx local-ai-gateway web-signin      # then sign in to those sites in its Chrome window, once
 npx local-ai-gateway key             # show the console link and API key
@@ -58,15 +64,20 @@ npx local-ai-gateway --help
 
 ## Where things are
 
-Everything is in `~/.local-ai-gateway` (or `$LOCAL_AI_GATEWAY_HOME`): `config.json` (keys), `venv/`
-(the Python packages), `app/` (the console), `state/` (usage and pauses), `logs/`, `workspace/`.
-To remove it all: delete that folder.
+Everything is in `~/.local-ai-gateway` (or `$LOCAL_AI_GATEWAY_HOME`; on Windows
+`%USERPROFILE%\.local-ai-gateway`): `config.json` (keys), `venv/` (the Python packages), `app/` (the
+console), `state/` (usage and pauses), `logs/`, `workspace/`. To remove it all: delete that folder.
 
 ## If something doesn't work
 
-- **"Python 3.11 or newer is needed"**: install Python, then run the command again.
+- **"Python 3.11 or newer is needed"**: install Python, then run the command again. On Windows,
+  `py -3.13 --version` should print a version; if it doesn't, the Python install didn't add `py`.
 - **"Couldn't create a Python environment"** on Debian or Ubuntu: `sudo apt install python3-venv`.
-- **A tool shows "Not installed"**: it isn't on your `PATH` in this terminal.
+- **A tool shows "Not installed"**: it isn't on your `PATH` in this terminal. A terminal opened before
+  you installed it won't see it: open a new one.
 - **A tool shows "Not responding"** after you press Test: the message is the tool's own, usually
   that it needs signing in. Sign in to it in your terminal, then press Test again.
-- The logs are in `~/.local-ai-gateway/logs`.
+- The logs are in `~/.local-ai-gateway/logs`. Linux is where this has had the most use; macOS and
+  Windows are newer, and a log from there says what failed.
+- **Windows**: Ctrl+C in the terminal stops everything. The websites' Chrome window stays open on
+  purpose, so you stay signed in.

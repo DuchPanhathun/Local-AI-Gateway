@@ -1,0 +1,106 @@
+diff --git a/src/local_agent_gateway/runner.py b/src/local_agent_gateway/runner.py
+index dec8605..73f69d7 100644
+--- a/src/local_agent_gateway/runner.py
++++ b/src/local_agent_gateway/runner.py
+@@ -1,7 +1,8 @@
+ """Start CLI subprocesses and clean up after them.
+ 
+ * argv is executed directly, never through a shell;
+-* every CLI leads its own process group, so the whole tree can be signalled at once;
++* every CLI leads its own process group, so the whole tree can be signalled at once (on Windows,
++  which has no process groups to signal, the tree is walked with psutil instead);
+ * the prompt goes in on stdin while stdout and stderr are drained concurrently.
+ """
+ 
+@@ -11,7 +12,9 @@ import asyncio
+ import atexit
+ import contextlib
+ import os
++import re
+ import signal
++import subprocess
+ from asyncio import create_subprocess_exec
+ from collections.abc import AsyncIterator, Mapping
+ from dataclasses import dataclass
+@@ -27,6 +30,13 @@ PIPE_SETTLE_S = 1.0  # after exit, how long to wait for pipes a leftover grandch
+ EXIT_POLL_S = 0.05
+ LINE_LIMIT = 16 * 2**20  # one stream-json line can carry a whole file that a tool read
+ 
++IS_WINDOWS = os.name == "nt"
++# Windows has no SIGKILL: TerminateProcess is its only way to end a process, and psutil sends it for SIGTERM.
++_SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)
++# An npm-installed CLI is a .cmd file on Windows. cmd.exe runs it, and reads & | < > ^ % and line breaks
++# in its arguments as commands. Every argument here is validated already; a .cmd still never gets one of these.
++_CMD_SYNTAX = re.compile(r"[&|<>^%\r\n]")
++
+ _live: set[asyncio.subprocess.Process] = set()
+ _reapers: set[asyncio.Task[None]] = set()
+ 
+@@ -116,6 +126,7 @@ async def started(
+     grace_s: float = KILL_GRACE_S,
+ ) -> AsyncIterator[CliRun]:
+     """Spawn argv. Leaving the block kills whatever still runs (timeout, error or cancellation)."""
++    _refuse_cmd_syntax(argv)
+     try:
+         proc = await create_subprocess_exec(
+             *argv,
+@@ -124,7 +135,7 @@ async def started(
+             stderr=asyncio.subprocess.PIPE,
+             cwd=cwd,
+             env=dict(env),
+-            start_new_session=True,  # own process group: one killpg reaches the whole tree
++            **_own_group(),
+             limit=LINE_LIMIT,
+         )
+     except OSError as exc:
+@@ -171,7 +182,7 @@ def kill_all() -> None:
+     """SIGKILL every CLI tree that is still running (server shutdown, interpreter exit)."""
+     for proc in list(_live):
+         if proc.returncode is None:
+-            _signal_tree(proc.pid, _descendants(proc.pid), signal.SIGKILL)
++            _signal_tree(proc.pid, _descendants(proc.pid), _SIGKILL)
+ 
+ 
+ atexit.register(kill_all)
+@@ -179,7 +190,7 @@ atexit.register(kill_all)
+ 
+ async def _kill_after_grace(proc: asyncio.subprocess.Process, victims: list[psutil.Process], grace_s: float) -> None:
+     await _wait_for_exit(proc, grace_s)
+-    _signal_tree(proc.pid, victims + _descendants(proc.pid), signal.SIGKILL)
++    _signal_tree(proc.pid, victims + _descendants(proc.pid), _SIGKILL)
+     await _wait_for_exit(proc, KILL_WAIT_S)
+ 
+ 
+@@ -210,9 +221,30 @@ def _descendants(pid: int) -> list[psutil.Process]:
+         return []
+ 
+ 
++def _own_group() -> dict[str, object]:
++    """Spawn options that make the CLI lead its own process group (POSIX: one killpg reaches the whole tree).
++
++    Windows has no such thing; there a new process group at least keeps Ctrl+C in the terminal from
++    reaching the CLI, which this gateway ends itself.
++    """
++    if IS_WINDOWS:
++        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
++    return {"start_new_session": True}
++
++
++def _refuse_cmd_syntax(argv: list[str]) -> None:
++    if IS_WINDOWS and Path(argv[0]).suffix.lower() in (".cmd", ".bat"):
++        if any(_CMD_SYNTAX.search(arg) for arg in argv[1:]):
++            raise BadRequest(f"refusing to pass {Path(argv[0]).name} an argument cmd.exe would read as a command")
++
++
+ def _signal_tree(pgid: int, victims: list[psutil.Process], sig: int) -> None:
+-    with contextlib.suppress(ProcessLookupError, PermissionError):
+-        os.killpg(pgid, sig)
++    if hasattr(os, "killpg"):
++        with contextlib.suppress(ProcessLookupError, PermissionError):
++            os.killpg(pgid, sig)
++    else:  # Windows: no group to signal, so the CLI itself is ended like its descendants
++        with contextlib.suppress(psutil.Error):
++            victims = [psutil.Process(pgid), *victims]
+     for victim in victims:
+         with contextlib.suppress(psutil.Error):  # psutil refuses if the pid was reused meanwhile
+             victim.send_signal(sig)

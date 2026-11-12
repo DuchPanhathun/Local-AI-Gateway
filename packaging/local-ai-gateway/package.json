@@ -11,8 +11,12 @@
   },
   "os": [
     "linux",
-    "darwin"
+    "darwin",
+    "win32"
   ],
+  "scripts": {
+    "test": "node --test"
+  },
   "files": [
     "bin",
     "app.tgz",

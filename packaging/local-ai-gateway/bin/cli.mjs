@@ -9,13 +9,30 @@
 //   npx local-ai-gateway web-signin sign in to ChatGPT, Grok and MiMo in the gateway's Chrome
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { homedir } from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
+import {
+  browserCommand,
+  expandHome,
+  findChrome as locateChrome,
+  findCli as locateCli,
+  findPython as locatePython,
+  killTree,
+  pythonHint,
+  tarCommand,
+  terminate,
+  venvHint,
+  venvPython,
+} from "./platform.mjs";
 
+const WINDOWS = process.platform === "win32";
+// Python on Windows reads and writes text in the ANSI code page unless told otherwise; the gateways' logs
+// and the CLIs' output are UTF-8.
+const PYTHON_ENV = WINDOWS ? { PYTHONUTF8: "1" } : {};
 const PKG = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VERSION = JSON.parse(readFileSync(path.join(PKG, "package.json"), "utf8")).version;
 const HOME = path.resolve(process.env.LOCAL_AI_GATEWAY_HOME || path.join(homedir(), ".local-ai-gateway"));
@@ -59,7 +76,7 @@ Options:
   --no-open           don't open the browser
   -h, --help          this text
 
-Needs Node 20+, Python 3.11+ and, for --web, Google Chrome. Linux and macOS.
+Needs Node 20+, Python 3.11+ and, for --web, Google Chrome. Linux, macOS and Windows.
 Everything lives in ${HOME} (set LOCAL_AI_GATEWAY_HOME to change it).
 `;
 
@@ -138,44 +155,19 @@ function loadUserEnv() {
 // What this computer needs
 // ---------------------------------------------------------------------------
 
-function which(cmd) {
-  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
-    const file = path.join(dir, cmd);
-    try {
-      accessSync(file, constants.X_OK);
-      if (statSync(file).isFile()) return file;
-    } catch {}
-  }
-  return null;
-}
-
-function findPython() {
-  for (const cmd of ["python3.13", "python3.12", "python3.11", "python3", "python"]) {
-    const r = spawnSync(cmd, ["-c", "import sys; print(sys.version_info[0] * 100 + sys.version_info[1])"], { encoding: "utf8" });
-    if (r.status === 0 && Number(r.stdout.trim()) >= 311) return cmd;
-  }
-  return null;
-}
-
-function findChrome() {
-  const mac = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-  if (existsSync(mac)) return mac;
-  for (const cmd of ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]) {
-    const found = which(cmd);
-    if (found) return found;
-  }
-  return null;
-}
+// Where programs are, and how they start, differs by system: see platform.mjs.
+const findChrome = () => locateChrome({ home: homedir() });
+const findCli = (cli) => locateCli(cli, { home: homedir() });
 
 function ensureVenv(python, withWeb) {
   const venv = path.join(HOME, "venv");
-  const vpy = path.join(venv, "bin", "python");
+  const vpy = venvPython(venv);
   if (!existsSync(vpy)) {
     say("Creating a private Python environment (first run only)...");
-    const r = spawnSync(python, ["-m", "venv", venv], { stdio: "inherit" });
+    const r = spawnSync(python.cmd, [...python.args, "-m", "venv", venv], { stdio: "inherit" });
     if (r.status !== 0) {
       rmSync(venv, { recursive: true, force: true });
-      die("Couldn't create a Python environment. On Debian or Ubuntu: sudo apt install python3-venv");
+      die(`Couldn't create a Python environment. ${venvHint()}`);
     }
   }
   const wanted = [...BASE_REQS, ...(withWeb ? WEB_REQS : [])];
@@ -193,6 +185,19 @@ function ensureVenv(python, withWeb) {
   return vpy;
 }
 
+// Windows refuses to rename a folder while something (a virus scanner, looking at the files
+// just written) has one of them open: try again for a few seconds.
+function renameWithRetry(from, to) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return renameSync(from, to);
+    } catch (err) {
+      if (!WINDOWS || !["EPERM", "EBUSY", "EACCES"].includes(err.code) || attempt >= 20) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    }
+  }
+}
+
 // The console is shipped as one archive (npm drops node_modules folders from a package).
 function ensureConsole() {
   const dir = path.join(HOME, "app", VERSION);
@@ -203,20 +208,10 @@ function ensureConsole() {
   const part = `${dir}.part`;
   rmSync(part, { recursive: true, force: true });
   mkdirSync(part, { recursive: true });
-  const r = spawnSync("tar", ["-xzf", archive, "-C", part], { stdio: "inherit" });
+  const r = spawnSync(tarCommand(), ["-xzf", archive, "-C", part], { stdio: "inherit" });
   if (r.status !== 0) die("Couldn't unpack the console. Is `tar` installed?");
-  renameSync(part, dir);
+  renameWithRetry(part, dir);
   return dir;
-}
-
-function findCli(cli) {
-  const found = which(cli.cmd);
-  if (found) return found;
-  for (const rel of cli.also ?? []) {
-    const file = path.join(homedir(), rel);
-    if (existsSync(file)) return file;
-  }
-  return null;
 }
 
 function isFree(port) {
@@ -279,19 +274,26 @@ function launch(name, command, args, { cwd, env }) {
   return logFile;
 }
 
-function shutdown(code = 0) {
+const exited = (child) => child.exitCode !== null || child.signalCode !== null;
+
+// `fromConsole`: the stop came from Ctrl+C (or closing the window), not from one of the
+// children dying. On Windows there is no SIGTERM to ask them with, but Ctrl+C has reached
+// every program sharing the console already, so they get time to close themselves down
+// (the gateways end their CLIs); if one of them died instead, the rest are ended right away.
+function shutdown(code = 0, { fromConsole = false } = {}) {
   if (stopping) return;
   stopping = true;
   say("\nStopping...");
-  for (const { child } of children) child.kill("SIGTERM");
-  const force = setTimeout(() => {
-    for (const { child } of children) child.kill("SIGKILL");
-    rmSync(RUN_FILE, { force: true });
-    process.exit(code);
-  }, 8000);
-  Promise.all(
-    children.map(({ child }) => new Promise((resolve) => (child.exitCode !== null || child.signalCode ? resolve() : child.once("exit", resolve)))),
-  ).then(() => {
+  for (const { child } of children) terminate(child);
+  const force = setTimeout(
+    () => {
+      for (const { child } of children) if (!exited(child)) killTree(child);
+      rmSync(RUN_FILE, { force: true });
+      process.exit(code);
+    },
+    WINDOWS && !fromConsole ? 0 : 8000,
+  );
+  Promise.all(children.map(({ child }) => new Promise((resolve) => (exited(child) ? resolve() : child.once("exit", resolve))))).then(() => {
     clearTimeout(force);
     rmSync(RUN_FILE, { force: true });
     process.exit(code);
@@ -315,9 +317,9 @@ async function waitReady(name, url, headers, logFile) {
 }
 
 function openBrowser(url) {
-  const opener = process.platform === "darwin" ? "open" : "xdg-open";
+  const { cmd, args } = browserCommand(url);
   try {
-    spawn(opener, [url], { detached: true, stdio: "ignore" }).on("error", () => {}).unref();
+    spawn(cmd, args, { detached: true, stdio: "ignore", windowsHide: true }).on("error", () => {}).unref();
   } catch {}
 }
 
@@ -332,8 +334,8 @@ function alreadyRunning() {
 }
 
 function checkPlatform() {
-  if (process.platform !== "linux" && process.platform !== "darwin") {
-    die("Local AI Gateway runs on Linux and macOS for now (the CLIs' process handling doesn't support Windows yet).");
+  if (!["linux", "darwin", "win32"].includes(process.platform)) {
+    die(`Local AI Gateway runs on Linux, macOS and Windows (this is ${process.platform}).`);
   }
   if (Number(process.versions.node.split(".")[0]) < 20) die(`Node 20 or newer is needed (this is ${process.versions.node}).`);
 }
@@ -349,8 +351,8 @@ async function start(args) {
     return;
   }
 
-  const python = findPython();
-  if (!python) die("Python 3.11 or newer is needed for the gateways. Install it from python.org or your package manager, then run this again.");
+  const python = locatePython();
+  if (!python) die(`Python 3.11 or newer is needed for the gateways. ${pythonHint()}, then run this again.`);
 
   if (args.web === true && !cfg.web) {
     if (!(await confirmWebRisks(args))) die("Not enabling the web gateway.");
@@ -365,8 +367,9 @@ async function start(args) {
   const runDir = path.join(HOME, "run"); // where the gateways start: no stray .env to read
   for (const dir of [workspace, stateDir, runDir]) mkdirSync(dir, { recursive: true, mode: 0o700 });
   for (const dir of args.allow) {
-    const full = path.resolve(dir.replace(/^~(?=$|\/)/, homedir()));
+    const full = path.resolve(expandHome(dir, homedir()));
     if (!existsSync(full) || !statSync(full).isDirectory()) die(`--allow ${dir}: that folder doesn't exist.`);
+    if (full.includes(",")) die(`--allow ${dir}: the gateway keeps its folders in a comma-separated list, so a folder with a comma in its path can't be used.`);
     if (!cfg.allow.includes(full)) cfg.allow.push(full);
   }
   const allow = [workspace, ...cfg.allow.filter((dir) => existsSync(dir))];
@@ -390,6 +393,7 @@ async function start(args) {
     cwd: runDir,
     env: {
       ...process.env,
+      ...PYTHON_ENV,
       ...bins,
       PYTHONPATH: path.join(PKG, "gateways", "local-agent", "src"),
       GATEWAY_HOST: "127.0.0.1",
@@ -406,6 +410,7 @@ async function start(args) {
       cwd: runDir,
       env: {
         ...process.env,
+        ...PYTHON_ENV,
         PYTHONPATH: path.join(PKG, "gateways", "chatgpt-web", "src"),
         GATEWAY_HOST: "127.0.0.1",
         GATEWAY_PORT: String(webPort),
@@ -437,8 +442,10 @@ async function start(args) {
     },
   });
 
-  process.on("SIGINT", () => shutdown(0));
-  process.on("SIGTERM", () => shutdown(0));
+  // Windows has no SIGTERM; closing the window is SIGHUP there, and Ctrl+Break is SIGBREAK.
+  for (const signal of WINDOWS ? ["SIGINT", "SIGBREAK", "SIGHUP"] : ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => shutdown(0, { fromConsole: true }));
+  }
 
   say(`Starting Local AI Gateway ${VERSION}...`);
   await waitReady("local-agent-gateway", `http://127.0.0.1:${agentPort}/health`, { Authorization: `Bearer ${cfg.agentToken}` }, agentLog);
@@ -480,12 +487,13 @@ function webSignin() {
   if (!cfg.web) die("The web gateway isn't turned on. Run `local-ai-gateway --web` first.");
   const chrome = findChrome();
   if (!chrome) die("Google Chrome (or Chromium) wasn't found.");
-  const vpy = path.join(HOME, "venv", "bin", "python");
+  const vpy = venvPython(path.join(HOME, "venv"));
   if (!existsSync(vpy)) die("Run `local-ai-gateway --web` once first, to set up.");
   const r = spawnSync(vpy, ["-m", "chatgpt_web_gateway", "signin"], {
     stdio: "inherit",
     env: {
       ...process.env,
+      ...PYTHON_ENV,
       PYTHONPATH: path.join(PKG, "gateways", "chatgpt-web", "src"),
       GATEWAY_TOKEN: cfg.webToken,
       CHROME_BIN: chrome,

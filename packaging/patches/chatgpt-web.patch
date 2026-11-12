@@ -1,0 +1,114 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index 522e054..94d3503 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -12,6 +12,7 @@ dependencies = [
+     "fastapi>=0.115",
+     "uvicorn>=0.30",
+     "pydantic-settings>=2.7",
++    "psutil>=6.0",  # finds the Chrome that has the profile open on macOS and Windows
+     "playwright>=1.55",  # drives the system Google Chrome; `playwright install` is not needed
+ ]
+ 
+diff --git a/src/chatgpt_web_gateway/chrome.py b/src/chatgpt_web_gateway/chrome.py
+index 9ebf66e..de5e97f 100644
+--- a/src/chatgpt_web_gateway/chrome.py
++++ b/src/chatgpt_web_gateway/chrome.py
+@@ -15,6 +15,7 @@ import logging
+ import os
+ import socket
+ import subprocess
++import sys
+ import time
+ import urllib.request
+ from pathlib import Path
+@@ -47,6 +48,8 @@ def profile_owner(profile: Path) -> int | None:
+     None when the link is stale (a Chrome that was killed leaves it behind, and the next Chrome
+     takes the profile over): its process is gone, a zombie, or a different program by now.
+     """
++    if not sys.platform.startswith("linux"):  # no /proc, and Windows has no such link
++        return _profile_owner_by_scan(profile)
+     try:
+         target = os.readlink(profile / "SingletonLock")  # "<hostname>-<pid>"
+     except OSError:
+@@ -69,6 +72,22 @@ def _is_profile_flag(arg: bytes, profile: Path) -> bool:
+     return arg.startswith(flag) and Path(os.fsdecode(arg[len(flag) :])).expanduser().resolve() == profile
+ 
+ 
++def _profile_owner_by_scan(profile: Path) -> int | None:
++    """The same answer on macOS and Windows: the browser process (not a helper of it) started with this profile."""
++    import psutil
++
++    for proc in psutil.process_iter(["pid", "cmdline", "status"]):
++        try:
++            argv = proc.info["cmdline"] or []
++            if proc.info["status"] == psutil.STATUS_ZOMBIE or any(arg.startswith("--type=") for arg in argv):
++                continue
++            if any(_is_profile_flag(os.fsencode(arg), profile) for arg in argv):
++                return proc.info["pid"]
++        except (psutil.Error, OSError):  # gone since the listing, or not ours to look at
++            continue
++    return None
++
++
+ def debugger_version(port: int) -> str | None:
+     """Chrome's version string if its debugging port answers, else None."""
+     try:
+@@ -81,10 +100,14 @@ def debugger_version(port: int) -> str | None:
+ 
+ 
+ def _spawn(argv: list[str]) -> subprocess.Popen:
+-    # Own session: stopping the gateway with Ctrl+C does not close the window.
+-    return subprocess.Popen(
+-        argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True
++    # Own session: stopping the gateway with Ctrl+C does not close the window. (Windows has no sessions:
++    # a detached process has no console for Ctrl+C to reach.)
++    own = (
++        {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
++        if os.name == "nt"
++        else {"start_new_session": True}
+     )
++    return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **own)
+ 
+ 
+ def open_for_signin(settings: Settings) -> str:
+diff --git a/src/chatgpt_web_gateway/config.py b/src/chatgpt_web_gateway/config.py
+index 59084be..783d4b5 100644
+--- a/src/chatgpt_web_gateway/config.py
++++ b/src/chatgpt_web_gateway/config.py
+@@ -2,6 +2,8 @@
+ 
+ from __future__ import annotations
+ 
++import os
++import sys
+ from pathlib import Path
+ from typing import Literal
+ 
+@@ -10,7 +12,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
+ 
+ TOKEN_PLACEHOLDER = "change-me"
+ MIN_TOKEN_LENGTH = 32
+-DEFAULT_CHROME_PROFILE = Path.home() / ".config" / "google-chrome"
++
++
++def _default_chrome_profile() -> Path:
++    """Where Chrome keeps the person's own profile on this system."""
++    if sys.platform == "darwin":
++        return Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
++    if sys.platform == "win32":
++        return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "Google" / "Chrome" / "User Data"
++    return Path.home() / ".config" / "google-chrome"
++
++
++DEFAULT_CHROME_PROFILE = _default_chrome_profile()
+ 
+ 
+ class Settings(BaseSettings):
+@@ -74,5 +87,5 @@ class Settings(BaseSettings):
+         path = path.resolve()
+         # Chrome refuses remote debugging on its default profile, and that one is the person's own.
+         if path == DEFAULT_CHROME_PROFILE.resolve():
+-            raise ValueError("must be a profile of its own, not Chrome's default ~/.config/google-chrome")
++            raise ValueError(f"must be a profile of its own, not Chrome's default {DEFAULT_CHROME_PROFILE}")
+         return path

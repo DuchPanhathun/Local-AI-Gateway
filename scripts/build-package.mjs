@@ -8,6 +8,10 @@
 // with a clean environment (no Supabase address, no keys) in its own .next-local
 // folder, so what ships has none of this server's settings, and a scan at the end
 // fails the build if any secret from a local .env file turns up in the package.
+//
+// The package runs on Linux, macOS and Windows, so what ships must hold no compiled
+// code (the build fails if the console archive does), and the gateways get the changes
+// in packaging/patches applied to their copy (they are separate projects; see there).
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -70,6 +74,10 @@ if (!existsSync(path.join(standalone, "server.js"))) {
 // extension download. Neither belongs in a package for other people.
 for (const name of readdirSync(standalone)) if (name.startsWith(".env")) rmSync(path.join(standalone, name), { force: true });
 rmSync(path.join(standalone, "extension"), { recursive: true, force: true });
+// sharp (and its libvips) is the one compiled module in the build: Next's image optimizer, for next/image,
+// which the console doesn't use. What it ships is for the system that built it, which would make the package
+// run only there. Next loads it only when /_next/image is asked for.
+for (const name of ["sharp", "@img"]) rmSync(path.join(standalone, "node_modules", name), { recursive: true, force: true });
 cpSync(path.join(root, "public"), path.join(standalone, "public"), { recursive: true });
 cpSync(path.join(root, ".next-local", "static"), path.join(standalone, ".next-local", "static"), { recursive: true });
 rmSync(path.join(pkgDir, "app.tgz"), { force: true });
@@ -82,6 +90,31 @@ for (const [name, dir] of Object.entries(gateways)) {
   cpSync(path.join(dir, "src"), path.join(out, "src"), { recursive: true, filter: (file) => !file.includes("__pycache__") });
   cpSync(path.join(dir, "pyproject.toml"), path.join(out, "pyproject.toml"));
   if (existsSync(path.join(dir, "README.md"))) cpSync(path.join(dir, "README.md"), path.join(out, "README.md"));
+  applyPatch(name, out);
+}
+
+// The Windows and macOS changes to a gateway are packaging/patches/<name>.patch, made against its repo root.
+// A gateway that already has them is left alone; one the patch no longer fits stops the build.
+function applyPatch(name, dir) {
+  const patch = path.join(root, "packaging", "patches", `${name}.patch`);
+  if (!existsSync(patch)) return;
+  // git apply, but not as part of this repo: the ceiling keeps it from finding the .git above.
+  const git = (...args) => spawnSync("git", ["apply", ...args, patch], { cwd: dir, encoding: "utf8", env: { ...process.env, GIT_CEILING_DIRECTORIES: path.dirname(dir) } });
+  const fits = git("--check");
+  if (fits.status === 0) {
+    const r = git();
+    if (r.status !== 0) {
+      console.error(r.stderr);
+      process.exit(1);
+    }
+    console.log(`  ${name}: applied packaging/patches/${name}.patch`);
+  } else if (git("--reverse", "--check").status === 0) {
+    console.log(`  ${name}: already has the changes in packaging/patches/${name}.patch`);
+  } else {
+    console.error(`\npackaging/patches/${name}.patch doesn't fit the ${name} source at ${gateways[name]}:\n${fits.stderr}`);
+    console.error("The gateway changed where the patch changes it: make the patch again against its current source.");
+    process.exit(1);
+  }
 }
 
 // 3. No secret from any .env file here may be in what ships (the console archive is
@@ -101,6 +134,13 @@ const scanDir = path.join(root, ".next-local", "scan");
 rmSync(scanDir, { recursive: true, force: true });
 mkdirSync(scanDir, { recursive: true });
 run("tar", ["-xzf", path.join(pkgDir, "app.tgz"), "-C", scanDir]);
+// The console runs on every system, so it can't hold compiled code (it would be for the system that built it).
+const compiled = readdirSync(scanDir, { recursive: true }).filter((file) => /\.(node|so(\.\d+)*|dylib|dll|exe)$/i.test(String(file)));
+if (compiled.length) {
+  console.error(`\nThe console archive has compiled code, which would only run on the system that built it:\n  ${compiled.slice(0, 10).join("\n  ")}`);
+  process.exit(1);
+}
+console.log("  the console archive holds no compiled code");
 let hits = 0;
 let files = 0;
 function scan(dir) {
@@ -128,6 +168,9 @@ if (hits) {
 }
 console.log(`  checked ${secrets.size} secret value(s) against ${files} files: none found`);
 
-// 4. Pack.
+// 4. The launcher's own tests (they need nothing installed), then pack.
+console.log("== Testing the launcher");
+run("node", ["--test"], { cwd: pkgDir });
+
 console.log("== Packing");
 run("npm", ["pack", "--pack-destination", path.join(root, "packaging")], { cwd: pkgDir });
