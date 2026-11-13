@@ -23,6 +23,7 @@ async function runIntegrationTests() {
     "sea-lion",
     "cerebras",
     "groq",
+    "coarena",
     "claude",
     "codex",
     "gemini",

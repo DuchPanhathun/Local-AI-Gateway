@@ -8,7 +8,7 @@ import {
   type UsageOutcome,
 } from "./usage-ledger";
 
-export type ProviderId = "sea-lion" | "cerebras" | "groq";
+export type ProviderId = "sea-lion" | "cerebras" | "groq" | "coarena";
 
 type ProviderConfig = {
   baseUrl: string;
@@ -22,7 +22,7 @@ type ProviderConfig = {
   streamUsage?: boolean;
 };
 
-// All three providers speak the OpenAI chat-completions format, so one call
+// All four providers speak the OpenAI chat-completions format, so one call
 // path covers them. Free/preview tiers cap requests per minute per key, so we
 // round-robin every call across all `<PREFIX>1..21` keys found for the chosen
 // provider, and fall through to the next key on a 429 before giving up.
@@ -44,6 +44,18 @@ const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     keyEnvPrefix: "GROQ_API_KEY",
     defaultModel: process.env.GROQ_MODEL || "openai/gpt-oss-120b",
     dailyTokenLimitPerKey: Number(process.env.GROQ_DAILY_TOKEN_LIMIT) || 500_000,
+    streamUsage: true,
+  },
+  // Coarena's Model API: one OpenAI-compatible endpoint in front of many models
+  // (Claude, Gemini, Grok, Kimi, ...), so the model list below is whatever its
+  // own /models says. Claude Fable 5.2 is the default. Fable decides per request
+  // whether to think first; when it does, that arrives as delta.reasoning and
+  // uses up max_tokens, so callers should leave room. stream_options.include_usage
+  // verified live.
+  coarena: {
+    baseUrl: "https://coarena.ai/api/v1",
+    keyEnvPrefix: "COARENA_API_KEY",
+    defaultModel: process.env.COARENA_MODEL || "claude-fable-5-2",
     streamUsage: true,
   },
 };
@@ -109,6 +121,9 @@ const KNOWN_LIMITS: Partial<Record<ProviderId, Record<string, QuotaLimits>>> = {
     "whisper-large-v3-turbo": { requestsPerMin: 20, requestsPerDay: 2_000 },
     "whisper-large-v3": { requestsPerMin: 20, requestsPerDay: 2_000 },
   },
+  // From the x-ratelimit-limit-requests header Coarena sends (30, resetting
+  // every 60 s) on a free key; the same for every model.
+  coarena: { "*": { requestsPerMin: 30 } },
 };
 
 function limitsFor(providerId: ProviderId, model: string): QuotaLimits | undefined {
@@ -292,6 +307,7 @@ const NON_CHAT_MODEL = /embed|rerank|bge-|sea-guard|prompt-guard/i;
 type UpstreamModel = {
   id: string;
   name?: string;
+  display_name?: string; // Coarena's, e.g. "Claude Fable 5.2"
   active?: boolean;
   input_modalities?: string[];
   output_modalities?: string[];
@@ -328,7 +344,7 @@ export async function listModels(providerId: ProviderId): Promise<ModelList> {
       const data = (await res.json()) as { data?: UpstreamModel[] };
       const models = (data.data ?? [])
         .filter(isChatModel)
-        .map((m) => ({ id: m.id, name: m.name ?? m.id }))
+        .map((m) => ({ id: m.id, name: m.name ?? m.display_name ?? m.id }))
         .sort((a, b) => a.id.localeCompare(b.id));
       if (!models.some((m) => m.id === config.defaultModel)) {
         models.unshift({ id: config.defaultModel, name: config.defaultModel });

@@ -120,13 +120,21 @@ function applyPatch(name, dir) {
 // 3. No secret from any .env file here may be in what ships (the console archive is
 // unpacked to look inside it).
 console.log("== Scanning for secrets");
+// A setting that says where something is (CLAUDE_BIN, CHROME_PROFILE_DIR, WORKDIR_ALLOWLIST...) isn't a
+// credential, and its value turns up in the package legitimately: as a gateway's own default, or in the docs.
+// Only a value that is named like a place AND looks like a path is skipped; a key or token never is.
+const PLACE_NAME = /(_BIN|_DIR|_HOME|_PATH|_WORKDIR|_ALLOWLIST)$/i;
+const PATH_VALUE = /^(~|\/|[A-Za-z]:[\\/])[\w .~/\\,:-]*$/;
 const secrets = new Set();
+let places = 0;
 for (const dir of [root, ...Object.values(gateways)]) {
   for (const name of readdirSync(dir).filter((f) => f.startsWith(".env") && !f.endsWith(".example"))) {
     for (const line of readFileSync(path.join(dir, name), "utf8").split("\n")) {
-      const m = /^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.+?)\s*$/.exec(line);
-      const value = m?.[1].replace(/^(['"])(.*)\1$/, "$2");
-      if (value && value.length >= 16 && !/^https?:\/\//.test(value)) secrets.add(value);
+      const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*$/.exec(line);
+      const value = m?.[2].replace(/^(['"])(.*)\1$/, "$2");
+      if (!value || value.length < 16 || /^https?:\/\//.test(value)) continue;
+      if (PLACE_NAME.test(m[1]) && PATH_VALUE.test(value)) places++;
+      else secrets.add(value);
     }
   }
 }
@@ -166,7 +174,7 @@ if (hits) {
   console.error(`\n${hits} leak(s) found. Not packing.`);
   process.exit(1);
 }
-console.log(`  checked ${secrets.size} secret value(s) against ${files} files: none found`);
+console.log(`  checked ${secrets.size} secret value(s) against ${files} files: none found (${places} path setting(s) not treated as secrets)`);
 
 // 4. The launcher's own tests (they need nothing installed), then pack.
 console.log("== Testing the launcher");

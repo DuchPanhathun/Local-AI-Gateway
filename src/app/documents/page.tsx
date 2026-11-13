@@ -685,6 +685,7 @@ export default function DocumentsPage() {
                 ["SEA-LION", <code key="v">sea-lion</code>, "Cloud API", <code key="m">{defaultModel("sea-lion")}</code>],
                 ["Cerebras", <code key="v">cerebras</code>, "Cloud API", <code key="m">{defaultModel("cerebras")}</code>],
                 ["Groq", <code key="v">groq</code>, "Cloud API", <code key="m">{defaultModel("groq")}</code>],
+                ["Coarena", <code key="v">coarena</code>, "Cloud API", <code key="m">{defaultModel("coarena")}</code>],
                 ["Claude Code", <code key="v">claude</code>, "Local CLI", <span key="m" className={styles.muted}>The CLI’s own default</span>],
                 ["Codex", <code key="v">codex</code>, "Local CLI", <span key="m" className={styles.muted}>The CLI’s own default</span>],
                 ["Gemini CLI", <code key="v">gemini</code>, "Local CLI", <span key="m" className={styles.muted}>The CLI’s own default</span>],
@@ -782,7 +783,7 @@ export default function DocumentsPage() {
             <h3 className={styles.h3}>Request body</h3>
             <Fields
               rows={[
-                ["provider", "string", <>Which provider answers: <code>sea-lion</code>, <code>cerebras</code>, <code>groq</code>, <code>claude</code>, <code>codex</code>, <code>gemini</code> or <code>antigravity</code>. Default <code>sea-lion</code>.</>],
+                ["provider", "string", <>Which provider answers: <code>sea-lion</code>, <code>cerebras</code>, <code>groq</code>, <code>coarena</code>, <code>claude</code>, <code>codex</code>, <code>gemini</code> or <code>antigravity</code>. Default <code>sea-lion</code>.</>],
                 ["model", "string", <>A model id from <a href="#models">GET /api/models</a>. Default: the provider’s default model.</>],
                 ["messages", "array", <>The conversation so far: <code>{`[{"role", "content"}]`}</code> with roles <code>system</code>, <code>user</code> and <code>assistant</code>. Send this or <code>prompt</code>.</>],
                 ["prompt", "string", <>One user message: a shorter way to send <code>messages</code> with a single message in it.</>],
@@ -1263,6 +1264,7 @@ export default function DocumentsPage() {
                 ["SEA-LION", "10 requests a minute per key", <>Thinks before answering, shown as <code>thinking</code> events. Turn it off with <code>{`"chat_template_kwargs": {"enable_thinking": false}`}</code>.</>],
                 ["Cerebras", "Different for each model", "Very fast. The account needs billing set up, or it answers 402."],
                 ["Groq", "500,000 tokens a day per key and model (our own limit)", <>When a key reaches it, the next key is used until the UTC day ends; when every key has, requests get <code>429</code> until then. <code>gpt-oss</code> models send <code>thinking</code> events.</>],
+                ["Coarena", "30 requests a minute per key", <>One endpoint for many models (Claude, Gemini, Grok, Kimi and more); pick one with <code>model</code>. Claude models decide for themselves whether to think before answering; when they do it is shown as <code>thinking</code> events and counted in <code>max_tokens</code>, so leave room for it.</>],
               ]}
             />
           </Section>

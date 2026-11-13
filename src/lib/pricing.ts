@@ -28,6 +28,19 @@ export const MODEL_PRICING_RATES: Record<string, { model: string; input: number;
   "gpt-oss-120b": { model: "GPT-OSS 120B", input: 0.15, output: 0.6 },
   "llama-3.3-70b-versatile": { model: "Llama 3.3 70B Versatile", input: 0.59, output: 0.79 },
 
+  // Coarena serves many models. Its own rate is its default model's, Claude Fable 5.2;
+  // the Claude ids it serves get their own rows (Anthropic's list prices, per
+  // platform.claude.com/docs/en/about-claude/pricing, Nov 2026), or the "claude"
+  // row below would match them by substring and charge Sonnet 4.6 rates. Its other
+  // models (Gemini, Grok, Kimi, ...) have no row yet and fall back to the provider rate.
+  coarena: { model: "Claude Fable 5.2", input: 8, output: 40 },
+  "claude-fable-5-2": { model: "Claude Fable 5.2", input: 8, output: 40 },
+  "claude-fable-5-1": { model: "Claude Fable 5.1", input: 10, output: 50 },
+  "claude-fable-5": { model: "Claude Fable 5", input: 10, output: 50 },
+  "claude-opus-5-5": { model: "Claude Opus 5.5", input: 4, output: 20 },
+  "claude-sonnet-5-5": { model: "Claude Sonnet 5.5", input: 2, output: 10 },
+  "claude-haiku-5-5": { model: "Claude Haiku 5.5", input: 0.1, output: 0.5 }, // prompts up to 100K tokens
+
   // Local agent / Web chat providers
   claude: { model: "Claude Sonnet 4.6", input: 3.0, output: 15.0 },
   "claude-sonnet-4-6": { model: "Claude Sonnet 4.6", input: 3.0, output: 15.0 },

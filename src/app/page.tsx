@@ -3164,7 +3164,7 @@ export default function Dashboard() {
               <td className={styles.mono}>provider</td>
               <td className={styles.dim}>
                 Optional, default <code>sea-lion</code>. Cloud:{" "}
-                <code>sea-lion</code>, <code>cerebras</code>, <code>groq</code>.
+                <code>sea-lion</code>, <code>cerebras</code>, <code>groq</code>, <code>coarena</code>.
                 Local CLIs: <code>claude</code>, <code>codex</code>,{" "}
                 <code>gemini</code>, <code>antigravity</code>. Websites:{" "}
                 <code>chatgpt</code>, <code>grok</code>, <code>mimo</code>.

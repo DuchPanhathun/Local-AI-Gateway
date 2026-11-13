@@ -4,7 +4,8 @@
 
 **Thun Murex** (this repository: `ai-thun`) is a Next.js API endpoint that proxies chat requests to cloud providers —
 [SEA-LION](https://sea-lion.ai) (AI Singapore's free, OpenAI-compatible LLM API),
-[Cerebras](https://cloud.cerebras.ai), or [Groq](https://console.groq.com), round-robining across
+[Cerebras](https://cloud.cerebras.ai), [Groq](https://console.groq.com), or
+[Coarena](https://coarena.ai) (Claude Fable 5.2 by default), round-robining across
 multiple API keys per provider so it doesn't hit any one key's rate limit — **and** to real AI
 coding CLIs (Claude Code, Codex, Gemini, Antigravity) running on this machine via
 [`local-agent-gateway`](../local-agent), a separate local-only service. Same `/api/chat` endpoint,
@@ -32,6 +33,10 @@ Fill in `.env`:
   [cloud.cerebras.ai](https://cloud.cerebras.ai). Same `1..21` convention as SEA-LION.
 - `GROQ_API_KEY1`, `GROQ_API_KEY2`, ... — get keys from
   [console.groq.com/keys](https://console.groq.com/keys). Same `1..21` convention.
+- `COARENA_API_KEY1`, `COARENA_API_KEY2`, ... — a key from [coarena.ai](https://coarena.ai) (a `coa_…`
+  key; its Model API is OpenAI-compatible at `https://coarena.ai/api/v1`). Same `1..21` convention;
+  30 requests a minute per key. `COARENA_MODEL` (optional) changes the default model from
+  `claude-fable-5-2`; any id from `GET https://coarena.ai/api/v1/models` works as `model`.
 - `APP_API_KEY` — a secret you make up. This is your **owner** credential: it calls `/api/chat`
   directly, and it's the only thing that can log into the home page (`/`) to view quota usage or generate/
   revoke API tokens (see below). Leave it blank to disable auth entirely (not recommended once the
