@@ -36,7 +36,10 @@ Fill in `.env`:
 - `COARENA_API_KEY1`, `COARENA_API_KEY2`, ... — a key from [coarena.ai](https://coarena.ai) (a `coa_…`
   key; its Model API is OpenAI-compatible at `https://coarena.ai/api/v1`). Same `1..21` convention;
   30 requests a minute per key. `COARENA_MODEL` (optional) changes the default model from
-  `claude-fable-5-2`; any id from `GET https://coarena.ai/api/v1/models` works as `model`.
+  `claude-fable-5-2`; any id from `GET https://coarena.ai/api/v1/models` works as `model`. Coarena's own
+  output limit is 8,192 tokens with thinking counted in it, which long agent runs use up before they
+  write an answer, so the gateway asks for 16,384 unless the caller sends `max_tokens`
+  (`COARENA_MAX_TOKENS` changes it).
 - `APP_API_KEY` — a secret you make up. This is your **owner** credential: it calls `/api/chat`
   directly, and it's the only thing that can log into the home page (`/`) to view quota usage or generate/
   revoke API tokens (see below). Leave it blank to disable auth entirely (not recommended once the

@@ -1264,7 +1264,7 @@ export default function DocumentsPage() {
                 ["SEA-LION", "10 requests a minute per key", <>Thinks before answering, shown as <code>thinking</code> events. Turn it off with <code>{`"chat_template_kwargs": {"enable_thinking": false}`}</code>.</>],
                 ["Cerebras", "Different for each model", "Very fast. The account needs billing set up, or it answers 402."],
                 ["Groq", "500,000 tokens a day per key and model (our own limit)", <>When a key reaches it, the next key is used until the UTC day ends; when every key has, requests get <code>429</code> until then. <code>gpt-oss</code> models send <code>thinking</code> events.</>],
-                ["Coarena", "30 requests a minute per key", <>One endpoint for many models (Claude, Gemini, Grok, Kimi and more); pick one with <code>model</code>. Claude models decide for themselves whether to think before answering; when they do it is shown as <code>thinking</code> events and counted in <code>max_tokens</code>, so leave room for it.</>],
+                ["Coarena", "30 requests a minute per key", <>One endpoint for many models (Claude, Gemini, Grok, Kimi and more); pick one with <code>model</code>. Claude models decide for themselves whether to think before answering; when they do it is shown as <code>thinking</code> events and counted in <code>max_tokens</code>. Coarena&rsquo;s own limit is 8,192 tokens, so unless you send <code>max_tokens</code> the gateway asks for 16,384.</>],
               ]}
             />
           </Section>

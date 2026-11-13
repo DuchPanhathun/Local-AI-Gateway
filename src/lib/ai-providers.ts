@@ -20,6 +20,12 @@ type ProviderConfig = {
   // Accepts stream_options.include_usage on streamed requests. Only set where
   // verified live — an unknown field can make a provider reject the request.
   streamUsage?: boolean;
+  // The output allowance to ask for when a caller names none (max_tokens or
+  // max_completion_tokens). For a provider whose own default is below what its
+  // models can do and counts reasoning against it: Coarena's is 8,192, and a
+  // model thinking over a long context can spend all of it and end with no
+  // answer (finish_reason "length").
+  defaultMaxTokens?: number;
 };
 
 // All four providers speak the OpenAI chat-completions format, so one call
@@ -57,8 +63,21 @@ const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     keyEnvPrefix: "COARENA_API_KEY",
     defaultModel: process.env.COARENA_MODEL || "claude-fable-5-2",
     streamUsage: true,
+    // Its own default is 8,192; 16,384 is the most it allows. Measured: runs on
+    // Fable 5.2 and Opus 5.5 ended "length" with all 8,192 tokens spent on thinking.
+    defaultMaxTokens: Number(process.env.COARENA_MAX_TOKENS) || 16_384,
   },
 };
+
+// The JSON body sent upstream: the provider's default model and output
+// allowance, under whatever the caller sent.
+function requestBody(config: ProviderConfig, body: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { model: config.defaultModel, ...body };
+  if (config.defaultMaxTokens && out.max_tokens == null && out.max_completion_tokens == null) {
+    out.max_tokens = config.defaultMaxTokens;
+  }
+  return out;
+}
 
 export const PROVIDER_IDS = Object.keys(PROVIDERS) as ProviderId[];
 
@@ -251,7 +270,7 @@ export async function callProvider(
           "Content-Type": "application/json",
           Authorization: `Bearer ${key}`,
         },
-        body: JSON.stringify({ model: config.defaultModel, ...body }),
+        body: JSON.stringify(requestBody(config, body)),
       });
     } catch (err) {
       lastError = err;
@@ -599,8 +618,7 @@ export async function streamProvider(
           Authorization: `Bearer ${key}`,
         },
         body: JSON.stringify({
-          model: config.defaultModel,
-          ...body,
+          ...requestBody(config, body),
           stream: true,
           ...(config.streamUsage ? { stream_options: { include_usage: true } } : {}),
         }),
