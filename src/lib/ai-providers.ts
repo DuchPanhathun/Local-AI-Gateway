@@ -30,7 +30,7 @@ type ProviderConfig = {
 
 // All four providers speak the OpenAI chat-completions format, so one call
 // path covers them. Free/preview tiers cap requests per minute per key, so we
-// round-robin every call across all `<PREFIX>1..21` keys found for the chosen
+// round-robin every call across all `<PREFIX>1..50` keys found for the chosen
 // provider, and fall through to the next key on a 429 before giving up.
 const PROVIDERS: Record<ProviderId, ProviderConfig> = {
   "sea-lion": {
@@ -151,7 +151,8 @@ function limitsFor(providerId: ProviderId, model: string): QuotaLimits | undefin
   return table[model] ?? table["*"];
 }
 
-const MAX_KEYS_PER_PROVIDER = 21;
+// Numbers above this are ignored, silently: keep it above the most keys any provider has.
+const MAX_KEYS_PER_PROVIDER = 50;
 
 // One rotation cursor per provider, so calling Cerebras doesn't perturb
 // SEA-LION's rotation and vice versa. Best-effort — lives per warm instance.

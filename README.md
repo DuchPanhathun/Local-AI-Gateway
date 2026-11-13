@@ -27,14 +27,14 @@ Fill in `.env`:
 
 - `SEA_LION_API_KEY1`, `SEA_LION_API_KEY2`, ... — get keys from the
   [SEA-LION Playground](https://playground.sea-lion.ai) (one key per Google account; the docs cap it
-  at 1 key per account). The route checks `SEA_LION_API_KEY1` through `SEA_LION_API_KEY21` and uses
+  at 1 key per account). The route checks `SEA_LION_API_KEY1` through `SEA_LION_API_KEY50` and uses
   whichever are set.
 - `CEREBRAS_API_KEY1`, `CEREBRAS_API_KEY2`, ... — get keys from
-  [cloud.cerebras.ai](https://cloud.cerebras.ai). Same `1..21` convention as SEA-LION.
+  [cloud.cerebras.ai](https://cloud.cerebras.ai). Same `1..50` convention as SEA-LION.
 - `GROQ_API_KEY1`, `GROQ_API_KEY2`, ... — get keys from
-  [console.groq.com/keys](https://console.groq.com/keys). Same `1..21` convention.
+  [console.groq.com/keys](https://console.groq.com/keys). Same `1..50` convention.
 - `COARENA_API_KEY1`, `COARENA_API_KEY2`, ... — a key from [coarena.ai](https://coarena.ai) (a `coa_…`
-  key; its Model API is OpenAI-compatible at `https://coarena.ai/api/v1`). Same `1..21` convention;
+  key; its Model API is OpenAI-compatible at `https://coarena.ai/api/v1`). Same `1..50` convention;
   30 requests a minute per key. `COARENA_MODEL` (optional) changes the default model from
   `claude-fable-5-2`; any id from `GET https://coarena.ai/api/v1/models` works as `model`. Coarena's own
   output limit is 8,192 tokens with thinking counted in it, which long agent runs use up before they
