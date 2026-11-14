@@ -5,7 +5,8 @@
 **Thun Murex** (this repository: `ai-thun`) is a Next.js API endpoint that proxies chat requests to cloud providers —
 [SEA-LION](https://sea-lion.ai) (AI Singapore's free, OpenAI-compatible LLM API),
 [Cerebras](https://cloud.cerebras.ai), [Groq](https://console.groq.com), or
-[Coarena](https://coarena.ai) (Claude Fable 5.2 by default), round-robining across
+[Coarena](https://coarena.ai) (Claude Fable 5.2 by default), or
+[Google AI Studio](https://aistudio.google.com) (Gemini), round-robining across
 multiple API keys per provider so it doesn't hit any one key's rate limit — **and** to real AI
 coding CLIs (Claude Code, Codex, Gemini, Antigravity) running on this machine via
 [`local-agent-gateway`](../local-agent), a separate local-only service. Same `/api/chat` endpoint,
@@ -40,6 +41,11 @@ Fill in `.env`:
   output limit is 8,192 tokens with thinking counted in it, which long agent runs use up before they
   write an answer, so the gateway asks for 16,384 unless the caller sends `max_tokens`
   (`COARENA_MAX_TOKENS` changes it).
+- `GOOGLE_AI_STUDIO_API_KEY1`, `GOOGLE_AI_STUDIO_API_KEY2`, ... — keys from
+  [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Same `1..50` convention. One key
+  serves everything under **Google AI Studio** below. `GOOGLE_AI_STUDIO_MODEL` (optional) changes the
+  default chat model from `gemini-3.5-flash-lite`; `GOOGLE_AI_STUDIO_TIMEOUT_S` (default 120) and
+  `GOOGLE_AI_STUDIO_FIRST_BYTE_S` (default 60) bound a request and the wait for a stream to start.
 - `APP_API_KEY` — a secret you make up. This is your **owner** credential: it calls `/api/chat`
   directly, and it's the only thing that can log into the home page (`/`) to view quota usage or generate/
   revoke API tokens (see below). Leave it blank to disable auth entirely (not recommended once the
@@ -166,6 +172,8 @@ curl -X POST http://localhost:3000/api/transcribe \
 
 - `file` (required): the audio, as a file upload. Vercel caps a request at 4.5 MB.
 - `model`: defaults to `GROQ_TRANSCRIBE_MODEL` from `.env`, else `whisper-large-v3-turbo` (Groq's fastest).
+  `-F provider=google` uses Gemini 3.5 Transcribe instead (up to about 14 MB; `language` and `prompt` go into
+  the instruction; the answer is `{"text": "…"}`)
 - `prompt`, `language`, `response_format` (`json`, `verbose_json` or `text`) and `temperature` are passed on
   to Groq; other fields are dropped.
 
@@ -205,8 +213,47 @@ curl -X POST http://localhost:3000/api/speech \
 - `response_format: "json"` answers `{"audio_base64", "mime_type", "voice", "duration_ms", …}` instead of
   the file. The file's response carries `X-Model`, `X-Voice` (URL-encoded) and `X-Duration-Ms` headers.
 
+**Gemini instead of MiMo**: `"provider": "google"` (or a `gemini-…-tts` model) speaks with Gemini's TTS over the
+Google keys: `model` defaults to `gemini-3.8-flash-lite-tts`, `voice` to `Kore` (`GET /api/speech?provider=google`
+lists the voices), `instructions` becomes the style. The audio is always a WAV file, whichever format Google sent.
+There's no 1,024-character limit, but the free tier allows 10 requests a day per model and key.
+
 Speech, MiMo transcription and `mimo` chat share one MiMo tab, so they take turns; each takes about 5–15 s.
 Every one is saved to the MiMo account's history.
+
+## Google AI Studio (`google`)
+
+One set of keys (`GOOGLE_AI_STUDIO_API_KEY*`) covers Gemini's models, through the same endpoints as the other
+providers where there is one, and through `/api/google/...` where there isn't:
+
+| What | How | Models (free-tier limits: RPM / TPM / RPD) |
+| --- | --- | --- |
+| Chat, streaming, tools | `/api/chat`, `/api/chat/stream` with `"provider": "google"` | `gemini-3.5-flash-lite` (default) and `gemini-3.1-flash-lite` 15/250K/500; `gemini-3-flash-preview`, `gemini-3.6-flash`, `gemini-3.8-flash`, `gemini-4-hydrogen`, `gemini-robotics-er-2-preview` 5/250K/20 |
+| Embeddings | `POST /api/embeddings` (OpenAI's format: `input`, `model`, `dimensions`) | `gemini-embedding-001` (default), `gemini-embedding-2`: 100/30K/1,000 |
+| Text to speech | `POST /api/speech` with `"provider": "google"` or a `gemini-…-tts` model; `GET /api/speech?provider=google` lists models and voices | `gemini-3.8-flash-lite-tts` (default), `gemini-3.8-flash-tts`, `gemini-3.1-flash-tts-preview`: 3/10K/10 |
+| Speech to text | `POST /api/transcribe` with `provider=google` | `gemini-3.5-transcribe`: 3/10K/25 |
+| Decision 1 | `POST /api/google/decisions` (owner key) | `gemini-decision-1`: 200/50K/10K |
+| Antigravity agents | `POST /api/google/interactions`, `GET /api/google/interactions/{id}` (owner key) | `antigravity-preview-09-2026`: 60/100K/100 |
+
+How it behaves:
+
+- **Rotation and cooldowns.** Google's free limits are per project and per model, and a 429 says which one was hit
+  and when it resets. A key that hit a model's per-minute limit is skipped for that model until it ends; one that hit
+  the daily limit is skipped until midnight Pacific (when Google resets it); the other models on that key keep working.
+  Keys from one Google project share their limits, which can't be seen from here.
+- **Models Google no longer serves.** `gemini-2.5-flash` and `gemini-2.5-flash-lite` answer 404 "no longer
+  available to new users" to every key made recently; the gateway passes that message on, once, and doesn't try the
+  other keys. Models with a limit of 0 for your project are reported the same way.
+- **Thinking and tools.** Gemini 3 models need their "thought signature" sent back with the next turn of a tool
+  call; clients that don't know about it (OpenAI SDKs) would get a 400, so the gateway keeps them and puts them back,
+  or sends Google's documented placeholder when it has none. Thinking tokens, which Google leaves out of
+  `completion_tokens`, are added to what is counted and charged.
+- **Not supported**: the Live API (a WebSocket): Gemini 3.5 Transcribe is used through its ordinary file endpoint.
+- **Prices** (`GET /api/shop`, usage cost) are Google's paid-tier prices, for the models that have one: the free tier
+  has none, and Google changes several prices on 2027-01-01.
+
+Interactions (Antigravity) live in the project of the key that made them: the gateway remembers which key until it
+restarts, and after that asks the keys one by one.
 
 ## Local agent CLIs (Claude Code, Codex, Gemini, Antigravity)
 
@@ -369,7 +416,7 @@ curl -X PATCH http://localhost:3000/api/providers \
 ### Access tokens
 
 **Access tokens** (`sk-ai-thun-…`) are keys you hand out to other apps and people instead of your
-`APP_API_KEY`. A token can call `/api/chat`, `/api/chat/stream`, `/api/image`, `/api/transcribe`,
+`APP_API_KEY`. A token can call `/api/chat`, `/api/chat/stream`, `/api/embeddings`, `/api/image`, `/api/transcribe`,
 `/api/speech`, `/api/models` and `/api/me`, and *nothing else*: it can't sign in to the console,
 see usage or quotas, or manage tokens. Make and manage them on the console's **API keys** page, or
 with `/api/tokens` and the owner key (all of it is in `/documents`). Each one has:

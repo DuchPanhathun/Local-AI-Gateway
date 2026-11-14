@@ -1,6 +1,6 @@
 // Every provider the gateway can answer with, and its name in the console.
 
-export const CLOUD_PROVIDERS = ["sea-lion", "cerebras", "groq", "coarena"] as const;
+export const CLOUD_PROVIDERS = ["sea-lion", "cerebras", "groq", "coarena", "google"] as const;
 // chatgpt, grok and mimo aren't CLIs: chatgpt-web-gateway answers through their
 // websites in a signed-in Chrome window. It speaks local-agent-gateway's API, so
 // they're listed and called like the CLIs.
@@ -14,6 +14,7 @@ export const PROVIDER_LABELS: Record<ChatProvider, string> = {
   cerebras: "Cerebras",
   groq: "Groq",
   coarena: "Coarena",
+  google: "Google AI Studio",
   claude: "Claude Code",
   codex: "Codex",
   gemini: "Gemini CLI",
@@ -30,6 +31,7 @@ export const MODEL_NAMES: Record<ChatProvider, string> = {
   cerebras: "Qwen 3.8",
   groq: "GPT-OSS 120B",
   coarena: "Claude Fable 5.2",
+  google: "Gemini 3.5 Flash-Lite",
   claude: "Claude",
   codex: "GPT-5 Codex",
   gemini: "Gemini",

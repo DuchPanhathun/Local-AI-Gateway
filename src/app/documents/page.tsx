@@ -30,6 +30,7 @@ const NAV: NavGroup[] = [
       { id: "images", label: "Image generation" },
       { id: "transcribe", label: "Speech to text" },
       { id: "speech", label: "Text to speech" },
+      { id: "google", label: "Google AI Studio" },
       { id: "me", label: "Your key" },
       { id: "usage", label: "Usage" },
       { id: "quotas", label: "Quotas" },
@@ -686,6 +687,7 @@ export default function DocumentsPage() {
                 ["Cerebras", <code key="v">cerebras</code>, "Cloud API", <code key="m">{defaultModel("cerebras")}</code>],
                 ["Groq", <code key="v">groq</code>, "Cloud API", <code key="m">{defaultModel("groq")}</code>],
                 ["Coarena", <code key="v">coarena</code>, "Cloud API", <code key="m">{defaultModel("coarena")}</code>],
+                ["Google AI Studio", <code key="v">google</code>, "Cloud API", <code key="m">{defaultModel("google")}</code>],
                 ["Claude Code", <code key="v">claude</code>, "Local CLI", <span key="m" className={styles.muted}>The CLI’s own default</span>],
                 ["Codex", <code key="v">codex</code>, "Local CLI", <span key="m" className={styles.muted}>The CLI’s own default</span>],
                 ["Gemini CLI", <code key="v">gemini</code>, "Local CLI", <span key="m" className={styles.muted}>The CLI’s own default</span>],
@@ -725,7 +727,8 @@ export default function DocumentsPage() {
               head={["Endpoint", "Owner key", "Access token"]}
               rows={[
                 [<code key="e">POST /api/chat, /api/chat/stream</code>, <Yes key="o" />, <Yes key="t" />],
-                [<code key="e">POST /api/image, /api/transcribe, /api/speech</code>, <Yes key="o" />, <Yes key="t" />],
+                [<code key="e">POST /api/embeddings, /api/image, /api/transcribe, /api/speech</code>, <Yes key="o" />, <Yes key="t" />],
+                [<code key="e">GET, POST, DELETE /api/google/…</code>, <Yes key="o" />, <No key="t" />],
                 [<code key="e">GET /api/models, /api/speech, /api/me</code>, <Yes key="o" />, <Yes key="t" />],
                 [<code key="e">GET /api/usage, /api/quotas</code>, <Yes key="o" />, <No key="t" />],
                 [<code key="e">GET, PATCH /api/providers</code>, <Yes key="o" />, <No key="t" />],
@@ -783,7 +786,7 @@ export default function DocumentsPage() {
             <h3 className={styles.h3}>Request body</h3>
             <Fields
               rows={[
-                ["provider", "string", <>Which provider answers: <code>sea-lion</code>, <code>cerebras</code>, <code>groq</code>, <code>coarena</code>, <code>claude</code>, <code>codex</code>, <code>gemini</code> or <code>antigravity</code>. Default <code>sea-lion</code>.</>],
+                ["provider", "string", <>Which provider answers: <code>sea-lion</code>, <code>cerebras</code>, <code>groq</code>, <code>coarena</code>, <code>google</code>, <code>claude</code>, <code>codex</code>, <code>gemini</code> or <code>antigravity</code>. Default <code>sea-lion</code>.</>],
                 ["model", "string", <>A model id from <a href="#models">GET /api/models</a>. Default: the provider’s default model.</>],
                 ["messages", "array", <>The conversation so far: <code>{`[{"role", "content"}]`}</code> with roles <code>system</code>, <code>user</code> and <code>assistant</code>. Send this or <code>prompt</code>.</>],
                 ["prompt", "string", <>One user message: a shorter way to send <code>messages</code> with a single message in it.</>],
@@ -909,7 +912,7 @@ export default function DocumentsPage() {
                 ["prompt", "string", "Words or spellings to expect."],
                 ["response_format", "string", <><code>json</code> (default), <code>verbose_json</code> or <code>text</code>.</>],
                 ["temperature", "number", "As in OpenAI’s API."],
-                ["provider", "string", <><code>groq</code> (default) or <code>mimo</code>: MiMo Studio’s MiMo-V2.5-ASR, below.</>],
+                ["provider", "string", <><code>groq</code> (default), <code>mimo</code>: MiMo Studio’s MiMo-V2.5-ASR, below, or <code>google</code>: Gemini 3.5 Transcribe (default <code>model</code> <code>gemini-3.5-transcribe</code>; up to about 14 MB; only <code>language</code> and <code>prompt</code> are used; the answer is <code>{`{"text": "…"}`}</code>).</>],
               ]}
             />
             <CodeBlock code={TRANSCRIBE_CURL} label="Request" />
@@ -937,7 +940,8 @@ export default function DocumentsPage() {
             </p>
             <Fields
               rows={[
-                ["input", "string", "The text, up to 1,024 characters.", true],
+                ["provider", "string", <><code>google</code> speaks with Gemini’s TTS over the Google keys instead (so does naming a <code>gemini-…-tts</code> model): default model <code>gemini-3.8-flash-lite-tts</code>, default voice <code>Kore</code>, <code>instructions</code> is the style; <code>GET /api/speech?provider=google</code> lists the models and voices. The answer is a WAV file either way; there is no 1,024-character limit, but the free tier allows 10 requests a day per model and key.</>],
+                ["input", "string", "The text, up to 1,024 characters (MiMo).", true],
                 ["model", "string", <><code>mimo-v2.5-tts</code> (default): one of its voices. <code>mimo-v2.5-tts-voicedesign</code>: a voice you describe. <code>mimo-v2.5-tts-voiceclone</code>: the voice of a recording.</>],
                 ["voice", "string", <>For <code>mimo-v2.5-tts</code>: Bingtang (冰糖, default), Mia, Moli (茉莉), Chloe, Suda (苏打), Milo, Baihua (白桦) or Dean.</>],
                 ["instructions", "string", "The speaking style, or for voicedesign the voice to create."],
@@ -952,6 +956,37 @@ export default function DocumentsPage() {
               <code>X-Duration-Ms</code> headers. Each takes about 5–15 seconds, and speech, MiMo
               transcription and MiMo chat take turns on one MiMo tab. Every one is saved to the MiMo
               account’s history; pausing MiMo pauses this endpoint.
+            </p>
+          </Section>
+
+          <Section id="google" title="Google AI Studio">
+            <p>
+              The Google keys (<code>GOOGLE_AI_STUDIO_API_KEY1</code>…) serve Gemini through the endpoints above
+              (<code>provider: &quot;google&quot;</code> in chat, <code>/api/embeddings</code>, speech, transcription), and the
+              owner key can reach the rest of Google&rsquo;s API through <code>/api/google/…</code>:
+            </p>
+            <Endpoint method="POST" path="/api/embeddings" />
+            <p>
+              OpenAI&rsquo;s format: <code>input</code> (a string or an array of them), <code>model</code> (default{" "}
+              <code>gemini-embedding-001</code>; or <code>gemini-embedding-2</code>), <code>dimensions</code>. Google gives no
+              token count for embeddings, so <code>usage</code> is an estimate of one token per four characters, which is what
+              is counted and charged.
+            </p>
+            <Table
+              head={["Request (owner key)", "What it does"]}
+              rows={[
+                [<code key="e">POST /api/google/decisions</code>, <>Gemini Decision 1 (<code>gemini-decision-1</code>): <code>input</code> and typed <code>questions</code>, as in Google&rsquo;s API; the answers come back as Google sends them.</>],
+                [<code key="e">POST /api/google/interactions</code>, <>An Antigravity agent (<code>agent</code>, default <code>antigravity-preview-09-2026</code>, with <code>environment: &quot;remote&quot;</code>) or a model (<code>model</code>). Follow-ups with <code>previous_interaction_id</code> or an <code>environment</code> id use the key that made the first. Long runs: send <code>background: true</code> and poll.</>],
+                [<code key="e">GET, DELETE /api/google/interactions/&#123;id&#125;, POST …/&#123;id&#125;:cancel</code>, "An interaction, for example a background one still running."],
+                [<code key="e">POST /api/google/models/&#123;model&#125;:generateContent</code>, <>Also <code>:countTokens</code>, <code>:embedContent</code>, <code>:batchEmbedContents</code>. Nothing streams, and nothing else is passed.</>],
+              ]}
+            />
+            <p>
+              Google&rsquo;s free limits are per project and per model; when a key reaches one, the next key is used, and that
+              key is skipped for that model until Google says it resets (a minute, or midnight Pacific time for a daily
+              limit). Keys from one project share their limits. <code>gemini-2.5-flash</code> and{" "}
+              <code>gemini-2.5-flash-lite</code> are no longer available to new keys: Google&rsquo;s 404 is passed on. The Live
+              API (WebSocket) isn&rsquo;t supported.
             </p>
           </Section>
 
@@ -1268,6 +1303,7 @@ export default function DocumentsPage() {
                 ["SEA-LION", "10 requests a minute per key", <>Thinks before answering, shown as <code>thinking</code> events. Turn it off with <code>{`"chat_template_kwargs": {"enable_thinking": false}`}</code>.</>],
                 ["Cerebras", "Different for each model", "Very fast. The account needs billing set up, or it answers 402."],
                 ["Groq", "500,000 tokens a day per key and model (our own limit)", <>When a key reaches it, the next key is used until the UTC day ends; when every key has, requests get <code>429</code> until then. <code>gpt-oss</code> models send <code>thinking</code> events.</>],
+                ["Google AI Studio", "Per model, per project: 5–15 requests a minute and 20–500 a day on the free tier", <>Gemini 3 and 4 models; chat, tools and streaming work as with the others. A key that reaches a model&rsquo;s limit is skipped for that model only, until Google says it resets. See <a href="#google">Google AI Studio</a>.</>],
                 ["Coarena", "30 requests a minute per key", <>One endpoint for many models (Claude, Gemini, Grok, Kimi and more); pick one with <code>model</code>. Claude models decide for themselves whether to think before answering; when they do it is shown as <code>thinking</code> events and counted in <code>max_tokens</code>. Coarena&rsquo;s own limit is 8,192 tokens, so unless you send <code>max_tokens</code> the gateway asks for 16,384.</>],
               ]}
             />

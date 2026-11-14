@@ -1,3 +1,22 @@
+import {
+  audioMimeType,
+  classifyGoogleFailure,
+  cooldowns,
+  GOOGLE_DEFAULT_CHAT_MODEL,
+  GOOGLE_LIMITS,
+  googleChatModels,
+  googleModelId,
+  interactions,
+  isFinal,
+  nativeUsage,
+  signatures,
+  speechBody,
+  transcriptFrom,
+  unwrapGoogleError,
+  wavFromAnswer,
+  withThoughts,
+  type GoogleResponse,
+} from "./google-ai";
 import { KeyLimits, retryAfterSeconds } from "./rate-limits";
 import {
   getKeyDayTokens,
@@ -8,7 +27,7 @@ import {
   type UsageOutcome,
 } from "./usage-ledger";
 
-export type ProviderId = "sea-lion" | "cerebras" | "groq" | "coarena";
+export type ProviderId = "sea-lion" | "cerebras" | "groq" | "coarena" | "google";
 
 type ProviderConfig = {
   baseUrl: string;
@@ -26,9 +45,16 @@ type ProviderConfig = {
   // model thinking over a long context can spend all of it and end with no
   // answer (finish_reason "length").
   defaultMaxTokens?: number;
+  // Google AI Studio: limits are per model and a 429 says which one ran out, so a key that has refused a model is
+  // held off it (see google-ai.ts). Its errors come wrapped in arrays and its tool calls carry thought signatures.
+  quota?: "google";
+  // A request that takes longer than this is given up on, without trying the next key (it would hang too).
+  timeoutMs?: number;
+  // The same for a stream, until its first bytes: Gemini 3.8 Flash has been seen taking minutes to say nothing.
+  firstByteMs?: number;
 };
 
-// All four providers speak the OpenAI chat-completions format, so one call
+// All five providers speak the OpenAI chat-completions format, so one call
 // path covers them. Free/preview tiers cap requests per minute per key, so we
 // round-robin every call across all `<PREFIX>1..50` keys found for the chosen
 // provider, and fall through to the next key on a 429 before giving up.
@@ -67,12 +93,24 @@ const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     // Fable 5.2 and Opus 5.5 ended "length" with all 8,192 tokens spent on thinking.
     defaultMaxTokens: Number(process.env.COARENA_MAX_TOKENS) || 16_384,
   },
+  // Google AI Studio's free tier, through its OpenAI-compatible endpoint. Keys are GOOGLE_AI_STUDIO_API_KEY1..N
+  // (new ones start "AQ."). Embeddings go through the same endpoint; speech, transcription, Decision 1 and the
+  // Antigravity agents have their own (callGoogleNative below). stream_options.include_usage verified live.
+  google: {
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    keyEnvPrefix: "GOOGLE_AI_STUDIO_API_KEY",
+    defaultModel: process.env.GOOGLE_AI_STUDIO_MODEL || GOOGLE_DEFAULT_CHAT_MODEL,
+    streamUsage: true,
+    quota: "google",
+    timeoutMs: Number(process.env.GOOGLE_AI_STUDIO_TIMEOUT_S) * 1000 || 120_000,
+    firstByteMs: Number(process.env.GOOGLE_AI_STUDIO_FIRST_BYTE_S) * 1000 || 60_000,
+  },
 };
 
 // The JSON body sent upstream: the provider's default model and output
 // allowance, under whatever the caller sent.
-function requestBody(config: ProviderConfig, body: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = { model: config.defaultModel, ...body };
+function requestBody(config: ProviderConfig, body: Record<string, unknown>, model = config.defaultModel): Record<string, unknown> {
+  const out: Record<string, unknown> = { model, ...body };
   if (config.defaultMaxTokens && out.max_tokens == null && out.max_completion_tokens == null) {
     out.max_tokens = config.defaultMaxTokens;
   }
@@ -143,6 +181,8 @@ const KNOWN_LIMITS: Partial<Record<ProviderId, Record<string, QuotaLimits>>> = {
   // From the x-ratelimit-limit-requests header Coarena sends (30, resetting
   // every 60 s) on a free key; the same for every model.
   coarena: { "*": { requestsPerMin: 30 } },
+  // AI Studio's free tier per project, per model (google-ai.ts). Keys from one project share them.
+  google: GOOGLE_LIMITS,
 };
 
 function limitsFor(providerId: ProviderId, model: string): QuotaLimits | undefined {
@@ -195,7 +235,9 @@ function recordUsage(
 // How much text is in an OpenAI-style message list, for estimating a caller's
 // tokens when the provider doesn't report them.
 function messageChars(messages: unknown): number {
+  if (typeof messages === "string") return messages.length; // an embeddings `input`
   if (!Array.isArray(messages)) return 0;
+  if (messages.every((m) => typeof m === "string")) return (messages as string[]).reduce((n, m) => n + m.length, 0);
   let chars = 0;
   for (const m of messages) {
     const content = (m as { content?: unknown } | null)?.content;
@@ -227,12 +269,13 @@ function collectKeys(prefix: string): { name: string; key: string }[] {
 export type ProviderCallResult = { status: number; data: unknown };
 
 // `caller`: the access token's id, when one made the request. `silent`: for a
-// test chat, which isn't recorded as traffic.
+// test chat, which isn't recorded as traffic. `path`/`model`: another endpoint
+// of the same API (embeddings), and the model to use when the body names none.
 export async function callProvider(
   providerId: ProviderId,
   body: Record<string, unknown>,
   caller?: string,
-  { silent = false }: { silent?: boolean } = {}
+  { silent = false, path = "/chat/completions", model: fallbackModel }: { silent?: boolean; path?: string; model?: string } = {}
 ): Promise<ProviderCallResult> {
   const config = PROVIDERS[providerId];
   const keys = collectKeys(config.keyEnvPrefix);
@@ -242,11 +285,19 @@ export async function callProvider(
     );
   }
 
-  const model = (body.model as string | undefined) || config.defaultModel;
+  const google = config.quota === "google";
+  const model = (body.model as string | undefined) || fallbackModel || config.defaultModel;
   const startedAt = Date.now();
   let cursor = cursors.get(providerId) ?? 0;
   let lastError: unknown;
   const limits = new KeyLimits(providerId, keys.length);
+  // Google: keys that can't give this model at all, and what Google said.
+  let final: GoogleResponse | undefined;
+  let finalKeys = 0;
+
+  // Google's tool calls need their thought signatures back (google-ai.ts).
+  const sent = requestBody(config, body, fallbackModel);
+  const payload = JSON.stringify(google ? signatures.restore(sent) : sent);
 
   for (let attempt = 0; attempt < keys.length; attempt++) {
     const { name, key } = keys[cursor % keys.length];
@@ -263,28 +314,68 @@ export async function callProvider(
       continue;
     }
 
+    if (google) {
+      const hold = cooldowns.hold(name, model);
+      if (hold) {
+        lastError = new Error(`${providerId} key can't be asked about ${model} for ${hold.wait} s (${hold.kind})`);
+        limits.rateLimited(hold.wait);
+        if (hold.response) {
+        final = hold.response;
+        finalKeys++;
+      }
+        continue;
+      }
+    }
+
     let res: Response;
     try {
-      res = await fetch(`${config.baseUrl}/chat/completions`, {
+      res = await fetch(`${config.baseUrl}${path}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${key}`,
         },
-        body: JSON.stringify(requestBody(config, body)),
+        body: payload,
+        signal: config.timeoutMs ? AbortSignal.timeout(config.timeoutMs) : undefined,
       });
     } catch (err) {
+      // A provider that hangs hangs for the next key too.
+      if (config.timeoutMs && err instanceof Error && err.name === "TimeoutError") {
+        throw new Error(`${providerId} didn't answer ${model} within ${Math.round(config.timeoutMs / 1000)} s`);
+      }
       lastError = err;
       continue;
     }
 
-    if (res.status === 429) {
-      lastError = new Error(`${providerId} key hit its rate limit (429)`);
-      limits.rateLimited(retryAfterSeconds(res.headers));
-      continue;
+    let data: unknown;
+    if (google) {
+      data = unwrapGoogleError(await res.json().catch(() => null));
+      const failure = classifyGoogleFailure(res.status, data);
+      if (failure) {
+        const response = { status: res.status, data };
+        cooldowns.set(name, model, failure, response);
+        lastError = new Error(`${providerId} key ${failure.kind} for ${model}`);
+        limits.rateLimited(failure.wait);
+        if (isFinal(failure.kind)) {
+        final = response;
+        finalKeys++;
+      }
+        continue;
+      }
+    } else {
+      if (res.status === 429) {
+        lastError = new Error(`${providerId} key hit its rate limit (429)`);
+        limits.rateLimited(retryAfterSeconds(res.headers));
+        continue;
+      }
+      data = await res.json();
+    }
+    if (google) {
+      signatures.remember(data);
+      const d = data as { usage?: Parameters<typeof withThoughts>[0] } | null;
+      if (d && typeof d === "object" && d.usage) d.usage = withThoughts(d.usage);
     }
 
-    const data: unknown = await res.json();
     const answer = (data as { choices?: { message?: { content?: unknown } }[] } | null)?.choices?.[0]?.message?.content;
 
     recordUsage(providerId, name, model, {
@@ -292,7 +383,7 @@ export async function callProvider(
       usage: (data as { usage?: TokenUsage } | null)?.usage ?? null,
       durationMs: Date.now() - startedAt,
       caller,
-      textChars: messageChars(body.messages) + (typeof answer === "string" ? answer.length : 0),
+      textChars: messageChars(body.messages ?? body.input) + (typeof answer === "string" ? answer.length : 0),
     }, silent);
 
     cursors.set(providerId, cursor);
@@ -300,6 +391,8 @@ export async function callProvider(
   }
 
   cursors.set(providerId, cursor);
+  // Every key refused the model for good: Google's own answer, not "try later".
+  if (final && finalKeys === keys.length) return final;
   // Every key over its limit: a RateLimitedError, which says when to retry.
   throw (
     limits.error() ??
@@ -351,21 +444,28 @@ export async function listModels(providerId: ProviderId): Promise<ModelList> {
   const config = PROVIDERS[providerId];
   const keys = collectKeys(config.keyEnvPrefix);
   let error: string | null = keys.length ? null : `No ${config.keyEnvPrefix}* keys are set`;
+  const google = config.quota === "google";
 
   for (const { key } of keys.slice(0, 3)) {
     try {
       const res = await fetch(`${config.baseUrl}/models`, {
         headers: { Authorization: `Bearer ${key}` },
+        ...(config.timeoutMs ? { signal: AbortSignal.timeout(20_000) } : {}),
       });
       if (!res.ok) {
         error = `${providerId} /models returned HTTP ${res.status}`;
         continue;
       }
       const data = (await res.json()) as { data?: UpstreamModel[] };
-      const models = (data.data ?? [])
-        .filter(isChatModel)
-        .map((m) => ({ id: m.id, name: m.name ?? m.display_name ?? m.id }))
-        .sort((a, b) => a.id.localeCompare(b.id));
+      // Google lists 60-odd models, most of which a free key can't use or that aren't for chat (image, music, live
+      // audio...): offer the text ones with a known free-tier limit that its list really has.
+      const live = new Set((data.data ?? []).map((m) => googleModelId(m.id)));
+      const models = google
+        ? googleChatModels().filter((m) => live.has(m.id))
+        : (data.data ?? [])
+            .filter(isChatModel)
+            .map((m) => ({ id: m.id, name: m.name ?? m.display_name ?? m.id }))
+            .sort((a, b) => a.id.localeCompare(b.id));
       if (!models.some((m) => m.id === config.defaultModel)) {
         models.unshift({ id: config.defaultModel, name: config.defaultModel });
       }
@@ -377,6 +477,8 @@ export async function listModels(providerId: ProviderId): Promise<ModelList> {
     }
   }
 
+  // The list couldn't be fetched: Google's is known without it.
+  if (google) return { default: config.defaultModel, models: googleChatModels(), error };
   return {
     default: config.defaultModel,
     models: [{ id: config.defaultModel, name: config.defaultModel }],
@@ -395,7 +497,7 @@ export type StreamResult =
 // Providers return errors in different shapes: {error: {message}} (Groq,
 // SEA-LION), {error: "..."}, or {message} (Cerebras).
 function upstreamErrorMessage(data: unknown, status: number): string {
-  const d = data as { error?: unknown; message?: unknown; detail?: unknown } | null;
+  const d = unwrapGoogleError(data) as { error?: unknown; message?: unknown; detail?: unknown } | null;
   const e = d?.error;
   if (typeof e === "string") return e;
   if (e && typeof e === "object" && typeof (e as { message?: unknown }).message === "string") {
@@ -513,6 +615,7 @@ function toEventStream(
           }
         }
 
+        if (providerId === "google") usage = withThoughts(usage);
         if (!finished) {
           send(
             event("error", { status: 502, detail: `${providerId} stream ended before completion` })
@@ -589,11 +692,14 @@ export async function streamProvider(
     );
   }
 
+  const google = config.quota === "google";
   const model = (body.model as string | undefined) || config.defaultModel;
   const startedAt = Date.now();
   let cursor = cursors.get(providerId) ?? 0;
   let lastError: unknown;
   const limits = new KeyLimits(providerId, keys.length);
+  let final: GoogleResponse | undefined;
+  let finalKeys = 0;
 
   for (let attempt = 0; attempt < keys.length; attempt++) {
     const { name, key } = keys[cursor % keys.length];
@@ -610,6 +716,32 @@ export async function streamProvider(
       continue;
     }
 
+    if (google) {
+      const hold = cooldowns.hold(name, model);
+      if (hold) {
+        lastError = new Error(`${providerId} key can't be asked about ${model} for ${hold.wait} s (${hold.kind})`);
+        limits.rateLimited(hold.wait);
+        if (hold.response) {
+        final = hold.response;
+        finalKeys++;
+      }
+        continue;
+      }
+    }
+
+    // The caller's signal, plus a limit on how long the first bytes may take.
+    const controller = new AbortController();
+    const forward = () => controller.abort(signal?.reason);
+    if (signal?.aborted) forward();
+    else signal?.addEventListener("abort", forward, { once: true });
+    let timedOut = false;
+    const timer = config.firstByteMs
+      ? setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+        }, config.firstByteMs)
+      : undefined;
+
     let res: Response;
     try {
       res = await fetch(`${config.baseUrl}/chat/completions`, {
@@ -619,19 +751,44 @@ export async function streamProvider(
           Authorization: `Bearer ${key}`,
         },
         body: JSON.stringify({
-          ...requestBody(config, body),
+          ...(google ? signatures.restore(requestBody(config, body)) : requestBody(config, body)),
           stream: true,
           ...(config.streamUsage ? { stream_options: { include_usage: true } } : {}),
         }),
-        signal,
+        signal: controller.signal,
       });
     } catch (err) {
       // The caller left; don't burn the next key's quota on nobody.
       if (signal?.aborted) throw err;
+      // A provider that says nothing for a minute says nothing to the next key too.
+      if (timedOut) throw new Error(`${providerId} sent nothing for ${model} within ${Math.round((config.firstByteMs ?? 0) / 1000)} s`);
       lastError = err;
       continue;
+    } finally {
+      // Only the wait for the first bytes is limited. The caller's abort stays forwarded for as long as the
+      // answer streams, so hanging up still stops the provider generating into nothing.
+      clearTimeout(timer);
     }
 
+    if (google && (res.status === 429 || res.status === 404)) {
+      const data = unwrapGoogleError(await res.json().catch(() => null));
+      const failure = classifyGoogleFailure(res.status, data);
+      if (failure) {
+        const response = { status: res.status, data };
+        cooldowns.set(name, model, failure, response);
+        lastError = new Error(`${providerId} key ${failure.kind} for ${model}`);
+        limits.rateLimited(failure.wait);
+        if (isFinal(failure.kind)) {
+        final = response;
+        finalKeys++;
+      }
+        continue;
+      }
+      // A 404 that is the caller's (no such model): answered as it is.
+      cursors.set(providerId, cursor);
+      recordUsage(providerId, name, model, { status: "error", caller });
+      return { ok: false, status: res.status, error: upstreamErrorMessage(data, res.status) };
+    }
     if (res.status === 429) {
       void res.body?.cancel();
       lastError = new Error(`${providerId} key hit its rate limit (429)`);
@@ -662,6 +819,9 @@ export async function streamProvider(
   }
 
   cursors.set(providerId, cursor);
+  if (final && finalKeys === keys.length) {
+    return { ok: false, status: final.status, error: upstreamErrorMessage(final.data, final.status) };
+  }
   // Every key over its limit: a RateLimitedError, which says when to retry.
   throw (
     limits.error() ??
@@ -808,4 +968,188 @@ export async function transcribeWithGroq(form: FormData, caller?: string): Promi
   throw lastError instanceof Error
     ? lastError
     : new Error("All groq API keys are unavailable right now.");
+}
+
+// ---------------------------------------------------------------------------
+// Google's own endpoints
+// ---------------------------------------------------------------------------
+
+// Speech, transcription, Decision 1 and the Antigravity agents aren't on the OpenAI-compatible endpoint: they
+// are Google's native API, over the same keys and the same rotation, cooldowns and usage counting.
+const GOOGLE_NATIVE = PROVIDERS.google.baseUrl.replace(/\/openai\/?$/, "");
+
+export type GoogleNativeRequest = {
+  method?: "GET" | "POST" | "DELETE";
+  // After /v1beta/: "models/gemini-3.8-flash-tts:generateContent", "decisions", "interactions/{id}".
+  path: string;
+  body?: unknown;
+  // For the limits, the cooldowns and the usage count.
+  model: string;
+  caller?: string;
+  // Only this key (an interaction's: it lives in the project of the key that made it).
+  keyName?: string;
+  // The size of the request's text, for the usage ledger.
+  chars?: number;
+  timeoutMs?: number;
+  // false for a call that makes the model do nothing (reading, cancelling or deleting an interaction): it uses no
+  // quota, and a read repeats the tokens its interaction already counted. Default true.
+  count?: boolean;
+};
+
+// Calls one of Google's native endpoints with the next key that can take the model. `keyName` of the key that
+// answered comes back so a caller can pin a follow-up to it.
+export async function callGoogleNative(
+  req: GoogleNativeRequest
+): Promise<ProviderCallResult & { keyName: string }> {
+  const config = PROVIDERS.google;
+  const all = collectKeys(config.keyEnvPrefix);
+  if (all.length === 0) {
+    throw new Error(`No ${config.keyEnvPrefix}* environment variables are set for provider "google".`);
+  }
+  const keys = req.keyName ? all.filter((k) => k.name === req.keyName) : all;
+  if (keys.length === 0) throw new Error(`The key that made this (${req.keyName}) isn't set any more.`);
+
+  const model = googleModelId(req.model);
+  const method = req.method ?? "POST";
+  const timeoutMs = req.timeoutMs ?? config.timeoutMs ?? 120_000;
+  const startedAt = Date.now();
+  let cursor = req.keyName ? 0 : (cursors.get("google") ?? 0);
+  let lastError: unknown;
+  const limits = new KeyLimits("google", keys.length);
+  let final: GoogleResponse | undefined;
+  let finalKeys = 0;
+  // A call that makes the model do nothing is neither held back by the model's limits nor a reason to hold it.
+  const metered = req.count !== false;
+
+  for (let attempt = 0; attempt < keys.length; attempt++) {
+    const { name, key } = keys[cursor % keys.length];
+    cursor++;
+
+    const hold = metered ? cooldowns.hold(name, model) : undefined;
+    if (hold) {
+      lastError = new Error(`google key can't be asked about ${model} for ${hold.wait} s (${hold.kind})`);
+      limits.rateLimited(hold.wait);
+      if (hold.response) {
+        final = hold.response;
+        finalKeys++;
+      }
+      continue;
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(`${GOOGLE_NATIVE}/${req.path}`, {
+        method,
+        headers: { "x-goog-api-key": key, ...(req.body !== undefined ? { "Content-Type": "application/json" } : {}) },
+        ...(req.body !== undefined ? { body: JSON.stringify(req.body) } : {}),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (err) {
+      if (err instanceof Error && err.name === "TimeoutError") {
+        throw new Error(`google didn't answer ${model} within ${Math.round(timeoutMs / 1000)} s`);
+      }
+      lastError = err;
+      continue;
+    }
+
+    const data = unwrapGoogleError(await res.json().catch(() => null));
+    const failure = metered ? classifyGoogleFailure(res.status, data) : undefined;
+    if (failure) {
+      const response = { status: res.status, data };
+      cooldowns.set(name, model, failure, response);
+      lastError = new Error(`google key ${failure.kind} for ${model}`);
+      limits.rateLimited(failure.wait);
+      if (isFinal(failure.kind)) {
+        final = response;
+        finalKeys++;
+      }
+      continue;
+    }
+
+    if (metered) {
+      recordUsage("google", name, model, {
+        status: res.ok ? "ok" : "error",
+        usage: nativeUsage(data),
+        durationMs: Date.now() - startedAt,
+        caller: req.caller,
+        textChars: req.chars,
+      });
+    }
+    if (!req.keyName) cursors.set("google", cursor);
+    return { status: res.status, data, keyName: name };
+  }
+
+  if (!req.keyName) cursors.set("google", cursor);
+  if (final && finalKeys === keys.length) return { ...final, keyName: keys[0].name };
+  throw limits.error() ?? (lastError instanceof Error ? lastError : new Error("All google API keys are unavailable right now."));
+}
+
+export { interactions as googleInteractions };
+
+// The names of the Google keys that are set, for a caller that has to ask them one by one.
+export function googleKeyNames(): string[] {
+  return collectKeys(PROVIDERS.google.keyEnvPrefix).map((k) => k.name);
+}
+
+export type GoogleSpeechResult = {
+  status: number;
+  model: string;
+  voice: string;
+  wav?: Uint8Array;
+  durationMs?: number;
+  // Google's answer, when there is no audio in it.
+  data?: unknown;
+};
+
+// Text to speech with one of the Gemini TTS models. The audio comes back as a WAV file whichever format Google used.
+export async function speakWithGoogle(
+  request: { input: string; model: string; voice: string; instructions?: string },
+  caller?: string
+): Promise<GoogleSpeechResult> {
+  const { status, data } = await callGoogleNative({
+    path: `models/${googleModelId(request.model)}:generateContent`,
+    body: speechBody(request.input, request.voice, request.instructions),
+    model: request.model,
+    caller,
+    chars: request.input.length,
+  });
+  const base = { status, model: request.model, voice: request.voice };
+  if (status < 200 || status >= 300) return { ...base, data };
+  const audio = wavFromAnswer(data);
+  return audio
+    ? { ...base, wav: audio.bytes, durationMs: audio.durationMs }
+    : { ...base, status: 502, data: { error: "The model answered without audio." } };
+}
+
+// Speech to text with Gemini 3.5 Transcribe, in the shape of the other transcription backends.
+export async function transcribeWithGoogle(
+  file: Blob,
+  options: { model: string; prompt?: string; language?: string },
+  caller?: string
+): Promise<TranscriptionResult> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const mimeType = audioMimeType(bytes, file.type, file instanceof File ? file.name : undefined);
+  if (!mimeType) {
+    const error = { error: { code: 400, status: "INVALID_ARGUMENT", message: "Can't tell what kind of audio this is. Send WAV, MP3, M4A/MP4, AAC, OGG, FLAC, AIFF or WebM." } };
+    return { status: 400, body: JSON.stringify(error), contentType: "application/json" };
+  }
+  const audio = Buffer.from(bytes).toString("base64");
+  // `prompt` is, as in OpenAI's form, words or spellings to expect: a hint inside the instruction, not the instruction.
+  const instruction =
+    `Transcribe this audio${options.language ? ` (spoken in ${options.language})` : ""}.` +
+    (options.prompt ? ` It may contain these words or spellings: ${options.prompt}.` : "") +
+    " Reply with the transcript only.";
+  const { status, data } = await callGoogleNative({
+    path: `models/${googleModelId(options.model)}:generateContent`,
+    body: { contents: [{ parts: [{ inlineData: { mimeType, data: audio } }, { text: instruction }] }] },
+    model: options.model,
+    caller,
+    timeoutMs: 150_000,
+  });
+  const ok = status >= 200 && status < 300;
+  return {
+    status,
+    body: JSON.stringify(ok ? { text: transcriptFrom(data) } : data),
+    contentType: "application/json",
+  };
 }

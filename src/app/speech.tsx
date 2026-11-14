@@ -13,9 +13,9 @@ import { CopyButton } from "./ui";
 
 export type SpeechMode = "transcribe" | "speak";
 
-type Provider = "groq" | "mimo";
+type Provider = "groq" | "mimo" | "google";
 
-const PROVIDER_NAMES: Record<Provider, string> = { groq: "Groq", mimo: "MiMo" };
+const PROVIDER_NAMES: Record<Provider, string> = { groq: "Groq", mimo: "MiMo", google: "Google" };
 
 // "" leaves it to the server: GROQ_TRANSCRIBE_MODEL, or whisper-large-v3-turbo.
 const GROQ_MODELS = ["whisper-large-v3-turbo", "whisper-large-v3"];
@@ -234,7 +234,7 @@ export function SpeechPlayground({
   const recording = recordingSince !== null;
   const providerPaused = paused.includes(provider);
   const mimoPaused = paused.includes("mimo");
-  const modelLabel = provider === "groq" ? model || "default model" : "mimo-v2.5-asr";
+  const modelLabel = provider === "groq" ? model || "default model" : provider === "google" ? "gemini-3.5-transcribe" : "mimo-v2.5-asr";
   const designing = speechModel === VOICE_DESIGN;
   const canSpeak = Boolean(text.trim()) && !speaking && !mimoPaused && (!designing || Boolean(instructions.trim()));
 
@@ -294,11 +294,13 @@ export function SpeechPlayground({
     const form = new FormData();
     form.set("file", clip.blob, clip.name);
     form.set("provider", provider);
-    // MiMo's page takes the audio only.
-    if (provider === "groq") {
-      if (model) form.set("model", model);
+    // MiMo's page takes the audio only; Google takes the language and a prompt.
+    if (provider === "groq" || provider === "google") {
+      if (provider === "groq" && model) form.set("model", model);
       if (language.trim()) form.set("language", language.trim());
       if (prompt.trim()) form.set("prompt", prompt.trim());
+    }
+    if (provider === "groq") {
       if (format !== "json") form.set("response_format", format);
       if (temperature.trim()) form.set("temperature", temperature.trim());
     }
@@ -561,6 +563,9 @@ export function SpeechPlayground({
             <option value="mimo" disabled={mimoPaused}>
               {`MiMo · MiMo-V2.5-ASR${heldNote("mimo")}`}
             </option>
+            <option value="google" disabled={paused.includes("google")}>
+              {`Google · Gemini 3.5 Transcribe${heldNote("google")}`}
+            </option>
           </select>
         </div>
         {provider === "groq" ? (
@@ -583,6 +588,12 @@ export function SpeechPlayground({
               and 2,000 a day.
             </p>
           </>
+        ) : provider === "google" ? (
+          <p className={styles.sidebarHint}>
+            Gemini 3.5 Transcribe, on the Google AI Studio keys. Up to about 14 MB. Language and prompt
+            are put into the instruction it is given. The free tier allows 3 a minute and 25 a day per
+            project.
+          </p>
         ) : (
           <p className={styles.sidebarHint}>
             MiMo Studio&apos;s speech recognition page, through chatgpt-web-gateway: good with noise,
@@ -592,7 +603,7 @@ export function SpeechPlayground({
         )}
       </div>
 
-      {provider === "groq" && (
+      {(provider === "groq" || provider === "google") && (
         <div className={styles.panelGroup}>
           <div className={styles.panelTitle}>Parameters</div>
           <div className={styles.field}>
@@ -621,6 +632,7 @@ export function SpeechPlayground({
               placeholder="Words or spellings to expect"
             />
           </div>
+          {provider === "groq" && (
           <div className={styles.twoCol}>
             <div className={styles.field}>
               <label className={styles.label} htmlFor="stt-format">
@@ -656,6 +668,7 @@ export function SpeechPlayground({
               />
             </div>
           </div>
+          )}
         </div>
       )}
 

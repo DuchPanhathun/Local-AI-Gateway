@@ -34,6 +34,7 @@ export const DEFAULT_MARKET: Record<string, MarketPrice> = {
   cerebras: { model: "Qwen3.8 27B on Cerebras", input: 0.99, output: 1.49, source: "https://computeprices.com/providers/cerebras/models/qwen3-8-27b" },
   groq: { model: "gpt-oss-120b on Groq", input: 0.15, output: 0.6, source: "https://www.morphllm.com/groq-pricing" },
   coarena: { model: "Claude Fable 5.2 (Anthropic's list price)", input: 8, output: 40, source: "https://platform.claude.com/docs/en/about-claude/pricing" },
+  google: { model: "Gemini 3.5 Flash-Lite", input: 0.3, output: 2.5, source: "https://aistudio.google.com/docs/pricing" },
   claude: { model: "Claude Sonnet 4.6", input: 3, output: 15, source: "https://metacto.com/blogs/anthropic-api-pricing-a-full-breakdown-of-costs-and-integration" },
   codex: { model: "GPT-5 Codex", input: 1.25, output: 10, source: "https://anotherwrapper.com/llm-pricing/gpt-5-codex-2025-09-15" },
   gemini: { model: "Gemini 3 Pro", input: 2, output: 12, source: "https://anotherwrapper.com/llm-pricing/gemini-3-pro-preview" },

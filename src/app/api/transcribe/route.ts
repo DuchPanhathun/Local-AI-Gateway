@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { transcribeWithGroq } from "@/lib/ai-providers";
+import { transcribeWithGoogle, transcribeWithGroq } from "@/lib/ai-providers";
+import { GOOGLE_DEFAULT_TRANSCRIBE_MODEL } from "@/lib/google-ai";
+import { RateLimitedError, retryAfterHeaders } from "@/lib/rate-limits";
 import { recordLocalRun, transcribeOnWeb } from "@/lib/local-agent";
 import { providerBlock } from "@/lib/provider-setup";
 import { checkAccess, keyRule, refusal, type KeyRule } from "@/lib/auth";
@@ -54,12 +56,15 @@ export async function POST(req: NextRequest) {
   }
 
   const provider = String(incoming.get("provider") || "groq");
-  if (provider !== "groq" && provider !== "mimo") return badRequest(`Unknown provider "${provider}". Supported: groq, mimo`);
+  if (provider !== "groq" && provider !== "mimo" && provider !== "google") {
+    return badRequest(`Unknown provider "${provider}". Supported: groq, mimo, google`);
+  }
   const rule = keyRule(access, provider);
   if (rule.refused) {
     return NextResponse.json({ error: rule.refused }, { status: 403, headers: CORS_HEADERS });
   }
   if (provider === "mimo") return transcribeOnMimo(file, incoming, rule);
+  if (provider === "google") return transcribeOnGoogle(file, incoming, rule);
 
   // Transcription runs on the Groq keys, so pausing Groq pauses it too.
   const blocked = await providerBlock("groq");
@@ -111,5 +116,29 @@ async function transcribeOnMimo(file: Blob, incoming: FormData, rule: KeyRule) {
       { error: err instanceof Error ? err.message : "chatgpt-web-gateway request failed" },
       { status: 502, headers: CORS_HEADERS }
     );
+  }
+}
+
+// Gemini 3.5 Transcribe over the Google keys. The audio goes inline (Google takes up to 20 MB in a request).
+async function transcribeOnGoogle(file: Blob, incoming: FormData, rule: KeyRule) {
+  const blocked = await providerBlock("google");
+  if (blocked) {
+    return NextResponse.json({ error: blocked }, { status: 503, headers: CORS_HEADERS });
+  }
+  if (file.size > 14 * 1024 * 1024) return badRequest("Google takes audio up to about 14 MB in one request: send a shorter recording");
+  const model = String(incoming.get("model") || GOOGLE_DEFAULT_TRANSCRIBE_MODEL);
+  const prompt = String(incoming.get("prompt") || "");
+  const language = String(incoming.get("language") || "");
+  try {
+    const result = await transcribeWithGoogle(file, { model, ...(prompt ? { prompt } : {}), ...(language ? { language } : {}) }, rule.caller);
+    return new NextResponse(result.body, { status: result.status, headers: { ...CORS_HEADERS, "Content-Type": result.contentType } });
+  } catch (err) {
+    if (err instanceof RateLimitedError) {
+      return NextResponse.json(
+        { error: err.message, ...(err.retryAfter !== undefined ? { retry_after: err.retryAfter } : {}) },
+        { status: 429, headers: { ...CORS_HEADERS, ...retryAfterHeaders(err.retryAfter) } }
+      );
+    }
+    return NextResponse.json({ error: err instanceof Error ? err.message : "Upstream request failed" }, { status: 502, headers: CORS_HEADERS });
   }
 }

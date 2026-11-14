@@ -41,6 +41,23 @@ export const MODEL_PRICING_RATES: Record<string, { model: string; input: number;
   "claude-sonnet-5-5": { model: "Claude Sonnet 5.5", input: 2, output: 10 },
   "claude-haiku-5-5": { model: "Claude Haiku 5.5", input: 0.1, output: 0.5 }, // prompts up to 100K tokens
 
+  // Google AI Studio. Its own rate is its default model's, Gemini 3.5 Flash-Lite. The free tier costs the gateway
+  // nothing; these are Google's paid-tier list prices (aistudio.google.com/docs/pricing, 2026-11-14), so a customer
+  // pays what the model costs elsewhere. Every id it serves has a row, or "gemini" below would match it by substring
+  // and charge Gemini 3 Pro rates. Not verbatim on the page, from a summary of it: 3.1 Flash-Lite, 3 Flash,
+  // Robotics-ER 2 and the embeddings. Changing on 2027-01-01: 3.6 Flash and 3.8 Flash to 1.50 / 7.50,
+  // Robotics-ER 2 to 2 / 10. Speech and transcription are counted in requests, not tokens, as MiMo's are.
+  google: { model: "Gemini 3.5 Flash-Lite", input: 0.3, output: 2.5 },
+  "gemini-3.5-flash-lite": { model: "Gemini 3.5 Flash-Lite", input: 0.3, output: 2.5 },
+  "gemini-3.1-flash-lite": { model: "Gemini 3.1 Flash-Lite", input: 0.25, output: 1.5 },
+  "gemini-3-flash-preview": { model: "Gemini 3 Flash (preview)", input: 0.5, output: 3 },
+  "gemini-3.6-flash": { model: "Gemini 3.6 Flash", input: 0.75, output: 3.75 },
+  "gemini-3.8-flash": { model: "Gemini 3.8 Flash", input: 0.75, output: 3.75 },
+  "gemini-4-hydrogen": { model: "Gemini 4 Hydrogen", input: 1.5, output: 7.5 },
+  "gemini-robotics-er-2-preview": { model: "Gemini Robotics-ER 2 (preview)", input: 1, output: 5 },
+  "gemini-embedding-001": { model: "Gemini Embedding 1", input: 0.15, output: 0 },
+  "gemini-embedding-2": { model: "Gemini Embedding 2", input: 0.2, output: 0 },
+
   // Local agent / Web chat providers
   claude: { model: "Claude Sonnet 4.6", input: 3.0, output: 15.0 },
   "claude-sonnet-4-6": { model: "Claude Sonnet 4.6", input: 3.0, output: 15.0 },
