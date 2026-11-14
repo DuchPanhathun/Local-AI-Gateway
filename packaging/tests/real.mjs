@@ -8,7 +8,7 @@
 //
 // Needs Node 20+ and Python 3.11+ on PATH, and the internet (pip installs the gateways' packages).
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -76,6 +76,31 @@ try {
   check("the console reaches the CLI gateway (/api/providers)", providers.status === 200, `status ${providers.status}`);
   console.log("providers as the console sees them:", JSON.stringify(Object.fromEntries(Object.entries(body.setup ?? {}).map(([name, s]) => [name, s.status]))));
   check("and refuses a caller without the key", (await fetch(`${base}/api/providers`)).status === 401);
+
+  // A cloud provider's key added in the console (Manage → Provider keys): kept in this home's state folder, used
+  // at once, never sent back whole, and gone when removed. Not checked with the provider, so no internet is needed.
+  const keysUrl = `${base}/api/provider-keys`;
+  const json = { ...auth, "Content-Type": "application/json" };
+  const listed = await (await fetch(keysUrl, { headers: auth })).json().catch(() => ({}));
+  check(
+    "the console lists the cloud providers' keys (/api/provider-keys)",
+    ["sea-lion", "cerebras", "groq", "coarena", "google"].every((p) => listed.providers?.some((x) => x.provider === p)),
+    JSON.stringify(listed).slice(0, 200),
+  );
+  check("and refuses a caller without the key", (await fetch(keysUrl)).status === 401);
+  const secret = "lag-real-test-key-0123456789abcdef";
+  const added = await fetch(keysUrl, { method: "POST", headers: json, body: JSON.stringify({ provider: "google", keys: secret, verify: false }) });
+  const addedBody = await added.json().catch(() => ({}));
+  check("a key added in the console is accepted", added.status === 200 && addedBody.added === 1, `${added.status} ${JSON.stringify(addedBody).slice(0, 200)}`);
+  check("and is never sent back whole", !JSON.stringify(addedBody).includes(secret) && !JSON.stringify(await (await fetch(keysUrl, { headers: auth })).json()).includes(secret));
+  const stateFile = path.join(home, "state", "provider-keys.json");
+  check("and is kept in the package's state folder", existsSync(stateFile) && readFileSync(stateFile, "utf8").includes(secret), stateFile);
+  if (process.platform !== "win32") check("where only its owner can read it", existsSync(stateFile) && (statSync(stateFile).mode & 0o077) === 0, existsSync(stateFile) ? (statSync(stateFile).mode & 0o777).toString(8) : "no file");
+  const setupOf = async () => (await (await fetch(`${base}/api/providers`, { headers: auth })).json().catch(() => ({}))).setup?.google?.status;
+  check("the provider is set up at once, with no restart", (await setupOf()) === "ready", String(await setupOf()));
+  const id = addedBody.keys?.find((k) => k.source === "web")?.id;
+  const removed = await fetch(`${keysUrl}?provider=google&id=${id}`, { method: "DELETE", headers: auth });
+  check("and removing it puts that back", removed.status === 200 && (await setupOf()) === "no-key", `${removed.status}`);
 
   const gatewayLog = readFileSync(path.join(home, "logs", "local-agent-gateway.log"), "utf8");
   check("the gateway answered the console", /GET \/health HTTP\/1\.1" 200/.test(gatewayLog), gatewayLog.slice(-300));

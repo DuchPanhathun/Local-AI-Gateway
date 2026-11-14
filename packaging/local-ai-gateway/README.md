@@ -59,14 +59,17 @@ npx local-ai-gateway --help
 - **The websites are not APIs.** Their terms don't allow automated use, so your accounts could be
   limited or banned. The gateway asks you to accept this before it turns on, and it can't get past
   a Cloudflare check or a sign-in page: you do that in its Chrome window.
-- **Cloud providers are optional.** Put API keys for Groq, Cerebras or SEA-LION in
-  `~/.local-ai-gateway/env` (one `NAME=value` per line, then restart) if you have them.
+- **Cloud providers are optional.** If you have API keys for Groq, Cerebras, SEA-LION, Coarena or Google AI
+  Studio (Gemini), paste them in the console: **Manage → Provider keys**. Each is checked with the provider
+  first, used from the next request with no restart, and can be switched off or removed there; it's kept in
+  `~/.local-ai-gateway/state`, readable only by you, and the console only ever shows a masked form. You can
+  still put `NAME=value` lines in `~/.local-ai-gateway/env` (then restart) instead.
 
 ## Where things are
 
 Everything is in `~/.local-ai-gateway` (or `$LOCAL_AI_GATEWAY_HOME`; on Windows
 `%USERPROFILE%\.local-ai-gateway`): `config.json` (keys), `venv/` (the Python packages), `app/` (the
-console), `state/` (usage and pauses), `logs/`, `workspace/`. To remove it all: delete that folder.
+console), `state/` (usage, pauses and the provider keys you add in the console), `logs/`, `workspace/`. To remove it all: delete that folder.
 
 ## If something doesn't work
 

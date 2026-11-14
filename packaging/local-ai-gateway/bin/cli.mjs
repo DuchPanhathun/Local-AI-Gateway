@@ -132,14 +132,17 @@ function consoleLink(cfg, port) {
   return `http://127.0.0.1:${port}/#key=${cfg.ownerKey}`;
 }
 
-// KEY=value lines the user may add for the cloud providers (Groq, Cerebras, SEA-LION).
+// KEY=value lines the user may add for the cloud providers (Groq, Cerebras, SEA-LION, Coarena, Google AI Studio).
+// The console's Manage page can add them too (Provider keys), without this file or a restart; a file that
+// already exists is left as it is.
 function loadUserEnv() {
   const file = path.join(HOME, "env");
   if (!existsSync(file)) {
     writeFileSync(
       file,
       "# Optional: API keys for cloud providers, one per line, then restart. Not needed for your own CLIs.\n" +
-        "# GROQ_API_KEY1=\n# CEREBRAS_API_KEY1=\n# SEA_LION_API_KEY1=\n",
+        "# You can also add them in the console, on the Manage page (Provider keys), with no restart.\n" +
+        "# GROQ_API_KEY1=\n# CEREBRAS_API_KEY1=\n# SEA_LION_API_KEY1=\n# COARENA_API_KEY1=\n# GOOGLE_AI_STUDIO_API_KEY1=\n",
       { mode: 0o600 },
     );
   }
