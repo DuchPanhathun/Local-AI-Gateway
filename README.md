@@ -335,10 +335,28 @@ curl -X POST http://localhost:3000/api/chat \
   changes. When a site shows a check, an age question or signs out, requests fail with 503 until
   someone deals with it in that Chrome window; the gateway doesn't get around checks.
 
+## Managing keys from the console
+
+Admins don't have to edit `.env` to add keys. The console's **Manage** page has a **Provider keys** section
+(the same as `/api/provider-keys`, owner key only): pick a provider, paste one or several keys (one per line,
+or lines copied from a `.env` file), and they are used from the next request, with no restart. Each key is first
+checked with the provider (its model list, which costs nothing), and one the provider refuses isn't added, so a
+typo never gets into the rotation. Any key can be switched off and on, including the ones in `.env`, and the
+ones added from the console can be removed (the `.env` ones can only be removed by editing the file).
+
+- The keys added this way are stored in `~/.local/state/ai-thun/provider-keys.json` (`AI_THUN_STATE_DIR` to
+  move it), outside the project folder like the paused providers, so deploys keep them. The file is readable
+  only by the account the server runs as. They can't be shown again: the console and the API list only a
+  masked form (`AQ.A…x1Yz`), and no key is written to a log.
+- A key added from the console is named `web-<id>` in usage and quotas (a `.env` key goes by its variable).
+  Up to 100 can be added for each provider, besides the `.env` ones (`1..50`).
+- A key that's in both places is used once. A provider whose keys are all switched off is held like one with
+  no key, and says so.
+
 ## How key rotation works
 
 `src/lib/ai-providers.ts` round-robins every request across whichever `<PROVIDER>_API_KEY*` vars
-are set for the chosen provider, and if a key comes back rate-limited (HTTP 429) it retries with
+are set for the chosen provider (plus the keys added from the console, above, that are switched on), and if a key comes back rate-limited (HTTP 429) it retries with
 the next one before giving up. This is a best-effort spread (the rotation cursor lives in memory
 per serverless instance, not a shared counter), not an exact quota tracker — but with N keys spread
 evenly you can sustain roughly `<per-key limit> * N` requests/min before any single key gets hit.

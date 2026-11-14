@@ -17,6 +17,8 @@ import {
   withThoughts,
   type GoogleResponse,
 } from "./google-ai";
+import { classifyKeyCheck, maskKey, type KeyCheckResult } from "./key-text";
+import { isKeyDisabled, storedKeys, webKeyName } from "./provider-keys";
 import { KeyLimits, retryAfterSeconds } from "./rate-limits";
 import {
   getKeyDayTokens,
@@ -132,10 +134,11 @@ export function providerHost(providerId: ProviderId): string {
   return new URL(PROVIDERS[providerId].baseUrl).host;
 }
 
-// How many API keys are set for a provider, and what to name the first one.
-export function keySetup(providerId: ProviderId): { count: number; envName: string } {
+// How many API keys a provider can use (those in the environment and those added in the console, but not ones
+// switched off), how many exist, and what to name the first environment variable.
+export function keySetup(providerId: ProviderId): { count: number; total: number; envName: string } {
   const { keyEnvPrefix } = PROVIDERS[providerId];
-  return { count: collectKeys(keyEnvPrefix).length, envName: `${keyEnvPrefix}1` };
+  return { count: collectKeys(keyEnvPrefix).length, total: describeKeys(providerId).length, envName: `${keyEnvPrefix}1` };
 }
 
 // Published quota reference, for the dashboard only — not enforced here
@@ -256,14 +259,72 @@ function getDayTokens(providerId: ProviderId, keyName: string, model: string): n
   return getKeyDayTokens(providerId, model, keyName, todayUTC());
 }
 
+// The keys a provider can use right now: `<PREFIX>1..50` from the environment, then the ones an admin added in the
+// console (lib/provider-keys.ts), without any that are switched off. A key added in the console that is also in the
+// environment is used once.
 function collectKeys(prefix: string): { name: string; key: string }[] {
   const keys: { name: string; key: string }[] = [];
+  const provider = PROVIDER_IDS.find((id) => PROVIDERS[id].keyEnvPrefix === prefix);
+  const added = provider ? storedKeys(provider) : [];
   for (let i = 1; i <= MAX_KEYS_PER_PROVIDER; i++) {
     const name = `${prefix}${i}`;
     const key = process.env[name];
-    if (key) keys.push({ name, key });
+    if (key && !isKeyDisabled(name)) keys.push({ name, key });
+  }
+  for (const { id, key } of added) {
+    const name = webKeyName(id);
+    if (!isKeyDisabled(name) && !keys.some((k) => k.key === key)) keys.push({ name, key });
   }
   return keys;
+}
+
+// A key as the console lists it, never with its value.
+export type KeyInfo = {
+  name: string; // what the usage ledger and the quotas call it
+  source: "env" | "web";
+  id?: string; // a key added in the console: what to remove it by
+  label?: string;
+  masked: string;
+  disabled: boolean;
+  addedAt?: string;
+};
+
+// Every key of a provider, switched off or not.
+export function describeKeys(providerId: ProviderId): KeyInfo[] {
+  const { keyEnvPrefix } = PROVIDERS[providerId];
+  const list: KeyInfo[] = [];
+  for (let i = 1; i <= MAX_KEYS_PER_PROVIDER; i++) {
+    const name = `${keyEnvPrefix}${i}`;
+    const key = process.env[name];
+    if (key) list.push({ name, source: "env", masked: maskKey(key), disabled: isKeyDisabled(name) });
+  }
+  for (const { id, key, label, addedAt } of storedKeys(providerId)) {
+    const name = webKeyName(id);
+    list.push({ name, source: "web", id, ...(label ? { label } : {}), masked: maskKey(key), disabled: isKeyDisabled(name), ...(addedAt ? { addedAt } : {}) });
+  }
+  return list;
+}
+
+// Whether this exact key is already set for the provider, in the environment or the console, on or off.
+export function hasKey(providerId: ProviderId, candidate: string): boolean {
+  const { keyEnvPrefix } = PROVIDERS[providerId];
+  for (let i = 1; i <= MAX_KEYS_PER_PROVIDER; i++) if (process.env[`${keyEnvPrefix}${i}`] === candidate) return true;
+  return storedKeys(providerId).some((k) => k.key === candidate);
+}
+
+// Asks the provider whether it takes a key, with a call that costs nothing (its model list). A key it refuses
+// is not worth adding; one it can't answer for (it is down, the address moved) says nothing either way.
+export async function verifyKey(providerId: ProviderId, key: string): Promise<{ result: KeyCheckResult; detail: string }> {
+  try {
+    const res = await fetch(`${PROVIDERS[providerId].baseUrl}/models`, {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    const body = res.status === 400 ? (await res.text().catch(() => "")).slice(0, 2_000) : "";
+    return classifyKeyCheck(res.status, body);
+  } catch {
+    return { result: "unknown", detail: `Couldn't reach ${providerHost(providerId)} to check it.` };
+  }
 }
 
 export type ProviderCallResult = { status: number; data: unknown };

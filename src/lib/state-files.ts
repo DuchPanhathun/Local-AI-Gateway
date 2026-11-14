@@ -19,10 +19,11 @@ function serialize(data: unknown): string {
 
 // Write-then-rename, so a crash mid-write can't leave a half-written file.
 // `tag` keeps concurrent writers of the same file off each other's temp file.
-export async function writeJsonAtomic(file: string, data: unknown, tag = "a"): Promise<void> {
+// `mode`: the file's permissions, for one that holds secrets (0o600: only this user reads it).
+export async function writeJsonAtomic(file: string, data: unknown, tag = "a", mode?: number): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${tag}.tmp`;
-  await writeFile(tmp, serialize(data));
+  await writeFile(tmp, serialize(data), mode === undefined ? undefined : { mode });
   await rename(tmp, file);
 }
 

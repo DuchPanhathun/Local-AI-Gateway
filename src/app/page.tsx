@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase-browser";
 import { ago, ApiKeys, type KeySummary } from "./api-keys";
 import { Codes } from "./codes";
+import { ProviderKeys } from "./provider-keys";
 import { ExtensionDownload } from "./extension";
 import { Icon, type IconName } from "./icons";
 import { Logo } from "./logo";
@@ -300,7 +301,7 @@ const NAV_ITEMS: {
     label: "Manage",
     icon: "manage",
     description:
-      "Pause or resume providers, the API reference, and the coding CLIs installed on this machine.",
+      "Pause or resume providers, add or switch off their API keys, the API reference, and the coding CLIs installed on this machine.",
   },
   {
     id: "extension",
@@ -955,6 +956,22 @@ export default function Dashboard() {
       } catch {
         return;
       }
+    }
+  }
+
+  // After keys were added, switched or removed: a provider may now be set up (or not), and its models list again.
+  async function refreshProviders() {
+    try {
+      const res = await fetch("/api/providers", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      setPaused(data.paused ?? []);
+      setManualPaused(data.manual ?? []);
+      setSetup(data.setup ?? {});
+      setChecks(data.checks ?? {});
+      await loadModels();
+    } catch {
+      // The next poll will show it.
     }
   }
 
@@ -3100,6 +3117,8 @@ export default function Dashboard() {
           </table>
         </div>
       </section>
+
+      <ProviderKeys onChanged={refreshProviders} />
 
       <section className={styles.section}>
         <div className={styles.sectionHeader}>

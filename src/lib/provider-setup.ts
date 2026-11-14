@@ -103,10 +103,15 @@ function gatewayView(force = false): Promise<GatewayView> {
 }
 
 function cloudSetup(provider: (typeof PROVIDER_IDS)[number]): ProviderSetup {
-  const { count, envName } = keySetup(provider);
-  return count > 0
-    ? READY
-    : { status: "no-key", reason: `No API key is set: add ${envName} to the server's environment and restart.` };
+  const { count, total, envName } = keySetup(provider);
+  if (count > 0) return READY;
+  return {
+    status: "no-key",
+    reason:
+      total > 0
+        ? "Every API key is switched off: switch one on, on the Manage page."
+        : `No API key is set: add one on the Manage page, or put ${envName} in the server's environment and restart.`,
+  };
 }
 
 function localSetup(provider: (typeof LOCAL_AGENT_PROVIDER_IDS)[number], view: GatewayView): ProviderSetup {

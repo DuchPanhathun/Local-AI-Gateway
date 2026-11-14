@@ -35,6 +35,7 @@ const NAV: NavGroup[] = [
       { id: "usage", label: "Usage" },
       { id: "quotas", label: "Quotas" },
       { id: "providers", label: "Pause & resume" },
+      { id: "provider-keys", label: "Provider keys" },
       { id: "tokens", label: "Access tokens" },
       { id: "users", label: "Users" },
       { id: "codes", label: "Redeem codes" },
@@ -362,6 +363,14 @@ const PAUSE_CURL = `curl -X PATCH "$AI_THUN_URL/api/providers" \\
   -d '{"provider": "cerebras", "paused": true}'
 
 # → {"paused": ["cerebras"]}`;
+
+const KEYS_ADD_CURL = `curl -X POST "$AI_THUN_URL/api/provider-keys" \\
+  -H "Authorization: Bearer $APP_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"provider": "google", "label": "second project", "keys": "AQ.Ab8RN6K…\\nAQ.Ab8RN6L…"}'
+
+# → {"results": [{"masked": "AQ.A…x1Yz", "status": "added", "detail": "The provider accepted it."}, …],
+#    "added": 2, "active": 34, "keys": [{"name": "web-3fa9c21b", "source": "web", "masked": "AQ.A…x1Yz", …}, …]}`;
 
 const TEST_CURL = `curl -X POST "$AI_THUN_URL/api/providers" \\
   -H "Authorization: Bearer $APP_API_KEY" \\
@@ -732,6 +741,7 @@ export default function DocumentsPage() {
                 [<code key="e">GET /api/models, /api/speech, /api/me</code>, <Yes key="o" />, <Yes key="t" />],
                 [<code key="e">GET /api/usage, /api/quotas</code>, <Yes key="o" />, <No key="t" />],
                 [<code key="e">GET, PATCH /api/providers</code>, <Yes key="o" />, <No key="t" />],
+                [<code key="e">GET, POST, PATCH, DELETE /api/provider-keys</code>, <Yes key="o" />, <No key="t" />],
                 [<code key="e">GET, POST, PATCH, DELETE /api/tokens</code>, <Yes key="o" />, <No key="t" />],
                 [<code key="e">GET, PATCH /api/users</code>, <Yes key="o" />, <No key="t" />],
                 [<code key="e">GET, POST, PATCH, DELETE /api/codes</code>, <Yes key="o" />, <No key="t" />],
@@ -1134,6 +1144,50 @@ export default function DocumentsPage() {
               "reason": "…" | null}`}</code>, <code>failing</code> being a failed test chat. Each{" "}
               <code>checks</code> entry is <code>{`{"status": "ok" | "failing" | "unverified",
               "checkedAt", "source": "test" | "traffic", "reason", "limited", "testing"}`}</code>.
+            </p>
+          </Section>
+
+          <Section id="provider-keys" title="Provider keys">
+            <Endpoint method="GET" path="/api/provider-keys" owner />
+            <Endpoint method="POST" path="/api/provider-keys" owner />
+            <Endpoint method="PATCH" path="/api/provider-keys" owner />
+            <Endpoint method="DELETE" path="/api/provider-keys?provider=…&id=…" owner />
+            <p>
+              The API keys of the cloud providers (SEA-LION, Cerebras, Groq, Coarena, Google AI
+              Studio), without editing <code>.env</code> or restarting: a change applies to the
+              next request. The console’s Manage page does the same. The keys set in the server’s
+              environment are listed and can be switched off; the ones added here can also be
+              removed. A key’s value is never sent back, only a masked form such as{" "}
+              <code>AQ.A…x1Yz</code>, and it isn’t written to any log. Keys added here are kept in
+              the server’s state folder (<code>provider-keys.json</code>, readable only by the
+              account the server runs as), next to the paused providers, so a deploy keeps them.
+            </p>
+            <p>
+              <code>GET</code> answers <code>{`{"providers": [{"provider", "active", "keys": [{"name", "source": "env" | "web", "id", "label", "masked", "disabled", "addedAt"}]}]}`}</code>.
+              A key’s <code>name</code> is what usage and quotas call it: its environment variable
+              (<code>GOOGLE_AI_STUDIO_API_KEY3</code>) or, for one added here,{" "}
+              <code>web-&lt;id&gt;</code>.
+            </p>
+            <Fields
+              rows={[
+                ["provider", "string", <>POST, PATCH and DELETE: <code>sea-lion</code>, <code>cerebras</code>, <code>groq</code>, <code>coarena</code> or <code>google</code>.</>, true],
+                ["keys", "string | string[]", <>POST: the key, or several, separated by lines, spaces or commas. Lines copied from a <code>.env</code> file work (<code>GROQ_API_KEY3=&quot;gsk_…&quot;</code>).</>, true],
+                ["label", "string", "POST: a note shown beside these keys, up to 60 characters."],
+                ["verify", "boolean", <>POST: ask the provider whether it takes each key first, with a call that costs nothing (its model list). Default <code>true</code>. A key it refuses is not added; one it can’t answer for (it is down) is added with a warning.</>],
+                ["name", "string", <>PATCH: the key to switch, by its <code>name</code>.</>, true],
+                ["disabled", "boolean", <>PATCH: <code>true</code> switches the key off (it is skipped as if it weren’t set), <code>false</code> on.</>, true],
+                ["id", "string", <>DELETE: the <code>id</code> of a key added here. A key from the environment answers <code>409</code>.</>, true],
+              ]}
+            />
+            <CodeBlock code={KEYS_ADD_CURL} label="Add two Google keys" />
+            <p>
+              POST answers <code>200</code> when at least one key was added and <code>422</code> when
+              none was, with a result for each key: <code>added</code>, <code>duplicate</code> (the
+              provider already has it, in the environment or here), <code>invalid</code> (not
+              something an API key looks like), <code>rejected</code> (the provider refused it) or{" "}
+              <code>limit</code> (up to 100 keys can be added here for each provider). A provider
+              whose keys are all switched off is held like one with no key: requests get{" "}
+              <code>503</code> and the reason says to switch one on.
             </p>
           </Section>
 
