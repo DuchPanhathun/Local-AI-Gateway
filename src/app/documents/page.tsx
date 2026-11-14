@@ -851,7 +851,11 @@ export default function DocumentsPage() {
 
           <Section id="models" title="Models">
             <Endpoint method="GET" path="/api/models" />
-            <p>Lists every provider’s models, with its default and whether it’s paused.</p>
+            <p>
+              Lists the providers you can use, with their models and default. A provider that is
+              paused (or not working) isn’t listed for an access token at all, as if its key couldn’t use it;
+              only the owner key still sees it, marked <code>paused</code>.
+            </p>
             <CodeBlock code={MODELS_CURL} label="Request" />
             <CodeBlock code={MODELS_RESPONSE} label="Response (shortened)" />
             <Fields
@@ -862,13 +866,13 @@ export default function DocumentsPage() {
                 ["models", "array", <>Each model’s <code>id</code> (the value for <code>model</code>) and <code>name</code>.</>],
                 ["note", "string | null", "Extra advice about the list, from the CLI."],
                 ["error", "string | null", "Why the list couldn’t be fetched, if it couldn’t."],
-                ["paused", "boolean", <>Paused providers turn requests away. See <a href="#providers">Pause &amp; resume</a>.</>],
+                ["paused", "boolean", <>Paused providers turn requests away; only the owner key sees them. See <a href="#providers">Pause &amp; resume</a>.</>],
               ]}
             />
             <p>
               Cloud lists come live from each provider, keep only chat models, and are cached for 10
               minutes. Gemini CLI can’t list its models, so its list is empty and any model name is
-              passed through. A paused cloud provider lists only its default model.
+              passed through. For the owner key, a paused cloud provider lists only its default model.
             </p>
           </Section>
 

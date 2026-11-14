@@ -107,7 +107,10 @@ curl -X POST http://localhost:3000/api/chat \
 ### Listing models
 
 `GET /api/models` returns every provider's selectable models in one response (APP_API_KEY or any
-access token):
+access token). An access token only gets the providers its key can use *and* that aren't turned away
+right now: one the owner paused (or that isn't set up, or failed its test chat) is left out, as if the key
+couldn't use it. Only APP_API_KEY still sees it, with `"paused": true`, so the console can resume it.
+Asking for a paused provider anyway still gets the `503` that says why.
 
 ```json
 {"providers": {

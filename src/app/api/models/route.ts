@@ -25,7 +25,9 @@ type LocalProviderModels = {
 // Every provider's selectable models in one response, and whether it's
 // paused. Unlike quotas/health, generated tokens may call this too: it's
 // discovery info for API callers, with no usage data or secrets in it. A
-// token only sees the providers its key can use.
+// token only sees the providers its key can use, and not the ones that are
+// turned away right now (paused, not set up, or failing their test chat): only
+// the owner is shown those, marked paused, so the console can resume them.
 export async function GET(req: NextRequest) {
   const access = await checkAccess(req, "app");
   if (!access.ok) return refusal(access, CORS_HEADERS);
@@ -77,6 +79,9 @@ export async function GET(req: NextRequest) {
 
   for (const id of Object.keys(providers)) {
     if (keyRule(access, id).refused) delete providers[id];
+    // Left out like a provider the key can't use; asking for it anyway still
+    // gets the 503 that says why.
+    else if (access.who !== "owner" && paused.has(id)) delete providers[id];
   }
 
   return NextResponse.json({ providers }, { headers: CORS_HEADERS });

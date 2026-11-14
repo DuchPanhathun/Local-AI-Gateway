@@ -69,6 +69,7 @@ type AccountData = {
   usage: MonthUsage;
   months: string[];
   publicOrigin: string | null;
+  unavailable?: string[]; // providers turned away right now: not listed as models to use
 };
 
 type Pack = {
@@ -635,11 +636,16 @@ export function AccountDashboard() {
   const hasCredit = creditBalance > 0;
   // When credit is available, all models are unlocked!
   const allProviders = PROVIDER_OPTIONS.map((p) => p.id as string);
-  const models = hasCredit
-    ? allProviders
-    : (plan?.providers ?? allProviders).filter(
-        (id) => plan?.agentTools || !TOOL_ONLY.includes(id),
-      );
+  // A provider the owner paused (or that isn't working) isn't shown at all: it
+  // can't be used now, so it's neither a model to use nor the example's.
+  const unavailable = new Set(data?.unavailable ?? []);
+  const models = (
+    hasCredit
+      ? allProviders
+      : (plan?.providers ?? allProviders).filter(
+          (id) => plan?.agentTools || !TOOL_ONLY.includes(id),
+        )
+  ).filter((id) => !unavailable.has(id));
   const firstModel = models[0] ?? "groq";
   const current = VIEWS.find((v) => v.id === view) ?? VIEWS[0];
 
