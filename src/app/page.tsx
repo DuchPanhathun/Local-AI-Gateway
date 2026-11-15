@@ -14,7 +14,7 @@ import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase-browser";
 import { ago, ApiKeys, type KeySummary } from "./api-keys";
 import { Codes } from "./codes";
-import { ProviderKeys } from "./provider-keys";
+import { ProviderKeys, type KeysTarget } from "./provider-keys";
 import { ExtensionDownload } from "./extension";
 import { Icon, type IconName } from "./icons";
 import { Logo } from "./logo";
@@ -143,7 +143,7 @@ const WEB_HOSTS: Record<string, string> = {
   mimo: "Xiaomi MiMo Studio",
 };
 
-function isCloudProvider(p: ChatProvider): boolean {
+function isCloudProvider(p: ChatProvider): p is (typeof CLOUD_PROVIDERS)[number] {
   return (CLOUD_PROVIDERS as readonly string[]).includes(p);
 }
 
@@ -678,6 +678,16 @@ const ACCOUNTS_ON = Boolean(
 
 export default function Dashboard() {
   const [view, setView] = useState<View>("dashboard");
+  // A cloud provider whose keys were asked for from the Dashboard or a Manage row: the Provider keys section
+  // selects it and scrolls into view, then clears this.
+  const [keysTarget, setKeysTarget] = useState<KeysTarget | null>(null);
+  const keysAsks = useRef(0);
+  const clearKeysTarget = useCallback(() => setKeysTarget(null), []);
+  const goToKeys = useCallback((provider: KeysTarget["provider"]) => {
+    keysAsks.current += 1; // a new number each time, so asking again for the same provider still counts
+    setKeysTarget({ provider, nonce: keysAsks.current });
+    setView("manage");
+  }, []);
   const [playgroundMode, setPlaygroundMode] = useState<PlaygroundMode>("chat");
   const theme = useSyncExternalStore(
     subscribeTheme,
@@ -1929,6 +1939,7 @@ export default function Dashboard() {
           const m = models?.[p];
           const off = isPaused(p);
           const unset = setupBlock(p);
+          const needsKey = unset?.status === "no-key";
           const status = unset
             ? {
                 label: SETUP_LABELS[unset.status] ?? "Not set up",
@@ -1986,11 +1997,21 @@ export default function Dashboard() {
                 className={styles.providerNote}
                 title={off ? undefined : (m?.error ?? undefined)}
               >
-                {off
-                  ? "Paused: requests are turned away until you resume it."
-                  : (m?.error ?? `Default model: ${m?.default ?? "…"}`)}
+                {needsKey
+                  ? "No usable API key. Add one, or switch one on, to start."
+                  : off
+                    ? "Paused: requests are turned away until you resume it."
+                    : (m?.error ?? `Default model: ${m?.default ?? "…"}`)}
               </div>
-              {off ? (
+              {needsKey ? (
+                <button
+                  type="button"
+                  className={styles.linkButton}
+                  onClick={() => goToKeys(p)}
+                >
+                  Add API key <Icon name="arrow" />
+                </button>
+              ) : off ? (
                 <button
                   type="button"
                   className={styles.linkButton}
@@ -3013,7 +3034,8 @@ export default function Dashboard() {
           the Playground and from apps using your access tokens alike: requests
           get HTTP 503. Its keys and CLI login stay as they are. A provider with
           no API key, no CLI installed or no sign-in is held automatically and
-          can&apos;t be resumed until it&apos;s set up. Each provider is also
+          can&apos;t be resumed until it&apos;s set up (a cloud API&apos;s keys
+          are added under Provider keys, below). Each provider is also
           tested with a real, tiny chat when the server starts (the websites
           only when you press Test), and one that doesn&apos;t answer is held
           until a test passes: fix it, then press Test again.
@@ -3075,6 +3097,17 @@ export default function Dashboard() {
                     </td>
                     <td style={{ textAlign: "right" }}>
                       <div className={styles.rowActions}>
+                        {isCloudProvider(p) && (
+                          <button
+                            type="button"
+                            className={styles.buttonGhost}
+                            title="Add, switch off or remove this provider's API keys"
+                            onClick={() => goToKeys(p)}
+                          >
+                            <Icon name="key" />
+                            {unset?.status === "no-key" ? "Add key" : "Keys"}
+                          </button>
+                        )}
                         <button
                           type="button"
                           className={styles.buttonGhost}
@@ -3118,7 +3151,7 @@ export default function Dashboard() {
         </div>
       </section>
 
-      <ProviderKeys onChanged={refreshProviders} />
+      <ProviderKeys onChanged={refreshProviders} select={keysTarget} onSelectHandled={clearKeysTarget} />
 
       <section className={styles.section}>
         <div className={styles.sectionHeader}>

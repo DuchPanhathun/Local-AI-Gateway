@@ -110,7 +110,7 @@ function cloudSetup(provider: (typeof PROVIDER_IDS)[number]): ProviderSetup {
     reason:
       total > 0
         ? "Every API key is switched off: switch one on, on the Manage page."
-        : `No API key is set: add one on the Manage page, or put ${envName} in the server's environment and restart.`,
+        : `No API key is set: add one on the Manage page (Provider keys), or put ${envName} in the server's environment and restart.`,
   };
 }
 

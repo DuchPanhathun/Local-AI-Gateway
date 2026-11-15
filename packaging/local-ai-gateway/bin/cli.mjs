@@ -472,6 +472,7 @@ Your own tools, found on this computer:`);
 The CLIs can read and work in: ${allow.join(", ")}
   add more with --allow DIR (they can do what a CLI does there, so choose carefully).
 ${cfg.web ? `Websites: run \`local-ai-gateway web-signin\` once to sign in to ChatGPT, Grok and MiMo.` : `Websites (ChatGPT, Grok, MiMo): off. Turn on with --web.`}
+Cloud APIs (Google AI Studio, Groq, Cerebras, SEA-LION, Coarena): paste their API keys in the console, on Manage > Provider keys. No restart needed.
 Logs: ${path.join(HOME, "logs")}
 `);
   if (args.open) openBrowser(link);

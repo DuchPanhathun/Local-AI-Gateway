@@ -5,7 +5,7 @@
 // the server's .env are listed too, but only switched off or on: a key's value is never sent to the browser, only a
 // masked form. A change applies to the next request, with no restart. See /api/provider-keys.
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { ago } from "./api-keys";
 import styles from "./page.module.css";
 import { CLOUD_PROVIDERS, PROVIDER_LABELS } from "./providers";
@@ -25,6 +25,10 @@ type KeyInfo = {
 
 type Listed = { provider: CloudProvider; keys: KeyInfo[]; active: number };
 
+// Asks this section to select a provider and come into view (from the Dashboard's cards and the Manage rows).
+// `nonce` makes a second ask for the same provider count.
+export type KeysTarget = { provider: CloudProvider; nonce: number };
+
 type Result = { masked: string; status: "added" | "duplicate" | "invalid" | "rejected" | "limit"; detail: string };
 
 const RESULT_BADGES: Record<Result["status"], { label: string; className: string }> = {
@@ -38,7 +42,17 @@ const RESULT_BADGES: Record<Result["status"], { label: string; className: string
 // Keys listed before "Show all".
 const SHOWN = 10;
 
-export function ProviderKeys({ onChanged }: { onChanged?: () => void }) {
+export function ProviderKeys({
+  onChanged,
+  select,
+  onSelectHandled,
+}: {
+  onChanged?: () => void;
+  select?: KeysTarget | null;
+  onSelectHandled?: () => void;
+}) {
+  const sectionRef = useRef<HTMLElement>(null);
+  const [handledNonce, setHandledNonce] = useState<number | null>(null);
   const [listed, setListed] = useState<Listed[] | null>(null);
   const [perProvider, setPerProvider] = useState(100);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -51,6 +65,16 @@ export function ProviderKeys({ onChanged }: { onChanged?: () => void }) {
   const [verify, setVerify] = useState(true);
   const [results, setResults] = useState<Result[] | null>(null);
   const [now, setNow] = useState(0);
+
+  // A provider asked for from elsewhere is selected as soon as the ask arrives (the pattern React documents for
+  // state that follows a prop); coming into view waits for the list, below.
+  if (select && select.nonce !== handledNonce) {
+    setHandledNonce(select.nonce);
+    setProvider(select.provider);
+    setShowAll(false);
+    setResults(null);
+    setText("");
+  }
 
   const load = useCallback(async () => {
     try {
@@ -81,6 +105,19 @@ export function ProviderKeys({ onChanged }: { onChanged?: () => void }) {
       clearInterval(id);
     };
   }, [load]);
+
+  // Bring the section into view and put the cursor in the paste box, once there is a list to show (or the list
+  // failed to load), a moment after the Manage page has been laid out.
+  const loaded = listed !== null || loadError !== null;
+  useEffect(() => {
+    if (!select || !loaded) return;
+    const timer = setTimeout(() => {
+      sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      document.getElementById("keys-text")?.focus({ preventScroll: true });
+      onSelectHandled?.();
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [select, loaded, onSelectHandled]);
 
   async function send(
     method: "POST" | "PATCH" | "DELETE",
@@ -167,7 +204,7 @@ export function ProviderKeys({ onChanged }: { onChanged?: () => void }) {
   const visible = showAll ? keys : keys.slice(0, SHOWN);
 
   return (
-    <section className={styles.section}>
+    <section className={styles.section} ref={sectionRef}>
       <div className={styles.sectionHeader}>
         <span className={styles.sectionTitle}>Provider keys</span>
         {current && (
