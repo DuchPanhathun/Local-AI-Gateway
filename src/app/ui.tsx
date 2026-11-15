@@ -23,9 +23,22 @@ export function CopyButton({ value, label = "Copy" }: { value: string; label?: s
   );
 }
 
-export function ProgressBar({ used, limit }: { used: number; limit?: number }) {
+// `money`: the numbers are US dollars. `approx`: the used amount is a guess (≈).
+export function ProgressBar({
+  used,
+  limit,
+  money = false,
+  approx = false,
+}: {
+  used: number;
+  limit?: number;
+  money?: boolean;
+  approx?: boolean;
+}) {
+  const show = (n: number) => (money ? `$${n.toFixed(2)}` : n.toLocaleString());
+  const usedText = `${approx ? "≈" : ""}${show(used)}`;
   if (!limit) {
-    return <span className={styles.dim}>{used.toLocaleString()}</span>;
+    return <span className={styles.dim}>{usedText}</span>;
   }
   const pct = Math.min(100, (used / limit) * 100);
   const color =
@@ -37,7 +50,7 @@ export function ProgressBar({ used, limit }: { used: number; limit?: number }) {
   return (
     <div>
       <div className={styles.progressLabel}>
-        {used.toLocaleString()} / {limit.toLocaleString()} ({pct.toFixed(1)}%)
+        {usedText} / {show(limit)} ({pct.toFixed(1)}%)
       </div>
       <div className={styles.progressTrack}>
         <div

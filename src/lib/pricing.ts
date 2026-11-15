@@ -31,8 +31,13 @@ export const MODEL_PRICING_RATES: Record<string, { model: string; input: number;
   // Coarena serves many models. Its own rate is its default model's, Claude Fable 5.2;
   // the Claude ids it serves get their own rows (Anthropic's list prices, per
   // platform.claude.com/docs/en/about-claude/pricing, Nov 2026), or the "claude"
-  // row below would match them by substring and charge Sonnet 4.6 rates. Its other
-  // models (Gemini, Grok, Kimi, ...) have no row yet and fall back to the provider rate.
+  // row below would match them by substring and charge Sonnet 4.6 rates. These rows
+  // are also exactly what Coarena bills: fitted to the cost_usd of 663 calls on 31
+  // accounts (GET /api/v1/requests, 2026-11-15, no call off by a cent), as input x rate
+  // + output x rate, with cached tokens at the full input price and reasoning tokens
+  // counted as output. Its other models (Grok, GPT-6, Kimi, ...) have no row yet and
+  // fall back to the provider rate: Kimi K3 has been seen once, which can't tell its
+  // input price from its output price.
   coarena: { model: "Claude Fable 5.2", input: 8, output: 40 },
   "claude-fable-5-2": { model: "Claude Fable 5.2", input: 8, output: 40 },
   "claude-fable-5-1": { model: "Claude Fable 5.1", input: 10, output: 50 },
@@ -40,6 +45,7 @@ export const MODEL_PRICING_RATES: Record<string, { model: string; input: number;
   "claude-opus-5-5": { model: "Claude Opus 5.5", input: 4, output: 20 },
   "claude-sonnet-5-5": { model: "Claude Sonnet 5.5", input: 2, output: 10 },
   "claude-haiku-5-5": { model: "Claude Haiku 5.5", input: 0.1, output: 0.5 }, // prompts up to 100K tokens
+  "gemini-4-carbon": { model: "Gemini 4 Carbon", input: 2, output: 10 }, // as billed by Coarena; 99 calls, 87 with cached tokens
 
   // Google AI Studio. Its own rate is its default model's, Gemini 3.5 Flash-Lite. The free tier costs the gateway
   // nothing; these are Google's paid-tier list prices (aistudio.google.com/docs/pricing, 2026-11-14), so a customer
@@ -138,6 +144,13 @@ export function getModelPricing(provider: string, modelName?: string): ModelRate
     inputPricePerToken: fallback.input / 1_000_000,
     outputPricePerToken: fallback.output / 1_000_000,
   };
+}
+
+// Whether the model has a row of its own, not only its provider's. Where it has, the cost is the model's real
+// price (for Coarena, what it bills); where it doesn't, it is the provider's rate, a guess.
+export function hasSpecificRate(modelName?: string): boolean {
+  const m = (modelName || "").toLowerCase().trim();
+  return m !== "" && Object.prototype.hasOwnProperty.call(MODEL_PRICING_RATES, m);
 }
 
 export type UsageCost = {

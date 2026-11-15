@@ -19,8 +19,10 @@ import {
 } from "./google-ai";
 import { classifyKeyCheck, maskKey, type KeyCheckResult } from "./key-text";
 import { isKeyDisabled, storedKeys, webKeyName } from "./provider-keys";
+import { calculateUsageCost, hasSpecificRate } from "./pricing";
 import { KeyLimits, retryAfterSeconds } from "./rate-limits";
 import {
+  getKeyDaySpend,
   getKeyDayTokens,
   getKeyDayUsage,
   recordUsageEvent,
@@ -38,6 +40,10 @@ type ProviderConfig = {
   // When set, a key stops being used once its tracked usage for the current
   // UTC day reaches this many tokens, and rotation moves on to the next key.
   dailyTokenLimitPerKey?: number;
+  // The same in dollars, for a provider that gives each key a budget across all its models (Coarena: $5 a day,
+  // at the models' prices). Each call's cost is added to its key's day (see recordUsage) and a key that has
+  // reached the budget is skipped, but only on a spend priced at the models' own rates: see overUsdBudget.
+  dailyUsdLimitPerKey?: number;
   // Accepts stream_options.include_usage on streamed requests. Only set where
   // verified live — an unknown field can make a provider reject the request.
   streamUsage?: boolean;
@@ -94,6 +100,8 @@ const PROVIDERS: Record<ProviderId, ProviderConfig> = {
     // Its own default is 8,192; 16,384 is the most it allows. Measured: runs on
     // Fable 5.2 and Opus 5.5 ended "length" with all 8,192 tokens spent on thinking.
     defaultMaxTokens: Number(process.env.COARENA_MAX_TOKENS) || 16_384,
+    // Each key is its own account with $5 of usage a day (GET /api/v1/limits: usd_per_day), resetting at 00:00 UTC.
+    dailyUsdLimitPerKey: Number(process.env.COARENA_DAILY_USD_LIMIT) || 5,
   },
   // Google AI Studio's free tier, through its OpenAI-compatible endpoint. Keys are GOOGLE_AI_STUDIO_API_KEY1..N
   // (new ones start "AQ."). Embeddings go through the same endpoint; speech, transcription, Decision 1 and the
@@ -149,6 +157,7 @@ type QuotaLimits = {
   requestsPerDay?: number;
   tokensPerMin?: number;
   tokensPerDay?: number;
+  usdPerDay?: number; // per key, across models
 };
 const KNOWN_LIMITS: Partial<Record<ProviderId, Record<string, QuotaLimits>>> = {
   "sea-lion": { "*": { requestsPerMin: 10 } },
@@ -182,8 +191,9 @@ const KNOWN_LIMITS: Partial<Record<ProviderId, Record<string, QuotaLimits>>> = {
     "whisper-large-v3": { requestsPerMin: 20, requestsPerDay: 2_000 },
   },
   // From the x-ratelimit-limit-requests header Coarena sends (30, resetting
-  // every 60 s) on a free key; the same for every model.
-  coarena: { "*": { requestsPerMin: 30 } },
+  // every 60 s) on a free key; the same for every model. The dollars are its
+  // usd_per_day, for the key as a whole.
+  coarena: { "*": { requestsPerMin: 30, usdPerDay: PROVIDERS.coarena.dailyUsdLimitPerKey } },
   // AI Studio's free tier per project, per model (google-ai.ts). Keys from one project share them.
   google: GOOGLE_LIMITS,
 };
@@ -223,6 +233,16 @@ function recordUsage(
   const now = Date.now();
   const u = outcome.usage;
   const tokens = u?.total_tokens ?? (u?.prompt_tokens ?? 0) + (u?.completion_tokens ?? 0);
+  // A provider with a dollar budget per key: what the call cost, at the model's price where it has one.
+  if (u && PROVIDERS[providerId].dailyUsdLimitPerKey && outcome.costUsd === undefined) {
+    const input = u.prompt_tokens ?? 0;
+    const output = u.completion_tokens ?? Math.max(0, (u.total_tokens ?? 0) - input);
+    outcome = {
+      ...outcome,
+      costUsd: calculateUsageCost(providerId, model, input, output).totalCost,
+      costExact: hasSpecificRate(model),
+    };
+  }
   const mapKey = recentKey(providerId, keyName, model);
   // Prune anything older than 60s, and cap the list so memory can't grow
   // unbounded under sustained traffic.
@@ -257,6 +277,14 @@ function messageChars(messages: unknown): number {
 
 function getDayTokens(providerId: ProviderId, keyName: string, model: string): number {
   return getKeyDayTokens(providerId, model, keyName, todayUTC());
+}
+
+// Whether a key has spent its dollar budget for today (all its models together). Only a spend priced at the models'
+// own rates counts: one that is partly priced at the provider's rate, for a model with no price of its own, is a
+// guess, and a wrong guess must not hold back a key that still has budget. The provider's own 429 handles that case.
+function overUsdBudget(providerId: ProviderId, keyName: string, limit: number): boolean {
+  const { usd, approx } = getKeyDaySpend(providerId, keyName, todayUTC());
+  return !approx && usd >= limit;
 }
 
 // The keys a provider can use right now: `<PREFIX>1..50` from the environment, then the ones an admin added in the
@@ -371,6 +399,12 @@ export async function callProvider(
       lastError = new Error(
         `${providerId} key hit its daily token limit (${config.dailyTokenLimitPerKey})`
       );
+      limits.pastDailyLimit();
+      continue;
+    }
+
+    if (config.dailyUsdLimitPerKey && overUsdBudget(providerId, name, config.dailyUsdLimitPerKey)) {
+      lastError = new Error(`${providerId} key has spent its daily budget ($${config.dailyUsdLimitPerKey})`);
       limits.pastDailyLimit();
       continue;
     }
@@ -777,6 +811,12 @@ export async function streamProvider(
       continue;
     }
 
+    if (config.dailyUsdLimitPerKey && overUsdBudget(providerId, name, config.dailyUsdLimitPerKey)) {
+      lastError = new Error(`${providerId} key has spent its daily budget ($${config.dailyUsdLimitPerKey})`);
+      limits.pastDailyLimit();
+      continue;
+    }
+
     if (google) {
       const hold = cooldowns.hold(name, model);
       if (hold) {
@@ -900,6 +940,10 @@ export type KeyUsageSnapshot = {
   tokensLast60s: number;
   requestsToday: number;
   tokensToday: number;
+  // A provider with a dollar budget per key: the key's spend today across all its models (the same on each of its
+  // rows), and whether part of it is a guess.
+  usdToday?: number;
+  usdApprox?: boolean;
   limits: QuotaLimits | undefined;
 };
 
@@ -915,6 +959,7 @@ export function getUsageSnapshot(): KeyUsageSnapshot[] {
     const today = getKeyDayUsage(providerId, day);
 
     for (const { name } of collectKeys(config.keyEnvPrefix)) {
+      const spend = config.dailyUsdLimitPerKey ? getKeyDaySpend(providerId, name, day) : undefined;
       // Every model this key was used with today or in the last minute,
       // defaulting to just the provider's default model when it hasn't been.
       const modelsUsed = new Set<string>(today.get(name)?.keys() ?? []);
@@ -938,6 +983,7 @@ export function getUsageSnapshot(): KeyUsageSnapshot[] {
           tokensLast60s: lastMinute.reduce((sum, e) => sum + e.tokens, 0),
           requestsToday: daily?.requests ?? 0,
           tokensToday: daily?.tokens ?? 0,
+          ...(spend ? { usdToday: spend.usd, usdApprox: spend.approx } : {}),
           limits: limitsFor(providerId, model),
         });
       }

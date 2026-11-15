@@ -36,6 +36,10 @@ export type UsageOutcome = {
   promptChars?: number;
   answerChars?: number;
   thinkingChars?: number;
+  // A provider that gives each key a dollar budget (Coarena): what this call cost at the model's price, and
+  // whether that price is the model's own (exact) or its provider's (a guess).
+  costUsd?: number;
+  costExact?: boolean;
 };
 
 type Counts = {
@@ -55,8 +59,15 @@ type Counts = {
   lastUsed: number; // epoch ms
 };
 
+type KeyEntry = {
+  requests: number;
+  tokens: number;
+  usd?: number; // spend that day, for a provider with a dollar budget per key
+  usdApprox?: boolean; // some of it was priced at the provider's rate, for lack of a price of the model's own
+};
+
 type ModelEntry = Counts & {
-  keys?: Record<string, { requests: number; tokens: number }>;
+  keys?: Record<string, KeyEntry>;
 };
 
 // days["2026-10-15"][provider][model]
@@ -221,6 +232,10 @@ export function recordUsageEvent(provider: string, model: string, outcome: Usage
     const key = ((entry.keys ??= {})[outcome.keyName] ??= { requests: 0, tokens: 0 });
     key.requests += 1;
     key.tokens += tokens?.total ?? 0;
+    if (typeof outcome.costUsd === "number" && Number.isFinite(outcome.costUsd) && outcome.costUsd > 0) {
+      key.usd = Number(((key.usd ?? 0) + outcome.costUsd).toFixed(8));
+      if (outcome.costExact === false) key.usdApprox = true;
+    }
   }
 
   if (outcome.caller) {
@@ -339,6 +354,21 @@ export function getKeyDayUsage(
     }
   }
   return result;
+}
+
+// What one key has spent on `day` across every model, for a provider that gives each key a dollar budget
+// (Coarena: $5 a day per key, whatever the model). `approx`: part of it was priced at the provider's rate, because
+// the model has no price of its own, so the sum is a guess.
+export function getKeyDaySpend(provider: string, keyName: string, day: string): { usd: number; approx: boolean } {
+  let usd = 0;
+  let approx = false;
+  for (const e of Object.values(store().ledger.days[day]?.[provider] ?? {})) {
+    const k = e.keys?.[keyName];
+    if (!k) continue;
+    usd += k.usd ?? 0;
+    if (k.usdApprox) approx = true;
+  }
+  return { usd: Number(usd.toFixed(8)), approx };
 }
 
 export function getKeyDayTokens(provider: string, model: string, keyName: string, day: string): number {

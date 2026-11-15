@@ -2,7 +2,7 @@
 // instead of guessing: the chat routes answer 429 with a Retry-After header and
 // `retry_after` (whole seconds) in the JSON body.
 
-// Every key of a provider was rate limited (429) or past its daily token limit.
+// Every key of a provider was rate limited (429) or past its daily limit (tokens, or dollars for Coarena).
 // `retryAfter` is the soonest one of them is usable again, when that's known.
 export class RateLimitedError extends Error {
   constructor(
@@ -83,9 +83,9 @@ export class KeyLimits {
     if (this.keyCount === 0 || this.skipped < this.keyCount) return undefined;
     const what =
       this.daily === this.skipped
-        ? "is past its daily token limit"
+        ? "is past its daily limit"
         : this.daily
-          ? "is rate limited or past its daily token limit"
+          ? "is rate limited or past its daily limit"
           : "hit its rate limit (429)";
     return new RateLimitedError(`Every ${this.providerId} key ${what}.`, this.soonest);
   }

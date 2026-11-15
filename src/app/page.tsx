@@ -41,6 +41,7 @@ type Limits = {
   requestsPerDay?: number;
   tokensPerMin?: number;
   tokensPerDay?: number;
+  usdPerDay?: number;
 };
 
 type KeyUsage = {
@@ -51,6 +52,8 @@ type KeyUsage = {
   tokensLast60s: number;
   requestsToday: number;
   tokensToday: number;
+  usdToday?: number; // the key's spend today across all its models (Coarena)
+  usdApprox?: boolean;
   limits?: Limits;
 };
 
@@ -2757,6 +2760,8 @@ export default function Dashboard() {
           ? rows
           : rows.filter((r) => r.requestsToday > 0 || r.requestsLast60s > 0);
         const keyCount = new Set(rows.map((r) => r.keyName)).size;
+        // A provider that gives each key a dollar budget (Coarena) gets a column for it.
+        const hasSpend = rows.some((r) => r.limits?.usdPerDay);
         return (
           <section key={provider} className={styles.section}>
             <div className={styles.sectionHeader}>
@@ -2777,6 +2782,11 @@ export default function Dashboard() {
                     <th>Tokens / min</th>
                     <th>Requests today</th>
                     <th>Tokens today</th>
+                    {hasSpend && (
+                      <th title="All of the key's models together: each key has its own budget for the day">
+                        Key spend today
+                      </th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -2808,11 +2818,21 @@ export default function Dashboard() {
                           limit={r.limits?.tokensPerDay}
                         />
                       </td>
+                      {hasSpend && (
+                        <td style={{ minWidth: 140 }}>
+                          <ProgressBar
+                            money
+                            approx={r.usdApprox}
+                            used={r.usdToday ?? 0}
+                            limit={r.limits?.usdPerDay}
+                          />
+                        </td>
+                      )}
                     </tr>
                   ))}
                   {visible.length === 0 && (
                     <tr className={styles.idleRow}>
-                      <td colSpan={6}>
+                      <td colSpan={hasSpend ? 7 : 6}>
                         No activity today across {keyCount} keys.
                       </td>
                     </tr>

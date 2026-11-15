@@ -40,7 +40,11 @@ Fill in `.env`:
   `claude-fable-5-2`; any id from `GET https://coarena.ai/api/v1/models` works as `model`. Coarena's own
   output limit is 8,192 tokens with thinking counted in it, which long agent runs use up before they
   write an answer, so the gateway asks for 16,384 unless the caller sends `max_tokens`
-  (`COARENA_MAX_TOKENS` changes it).
+  (`COARENA_MAX_TOKENS` changes it). Each key is its own account with $5 of usage a day (resetting at
+  00:00 UTC): the gateway adds up every call's cost per key at Coarena's own prices (`src/lib/pricing.ts`,
+  fitted to what Coarena bills), shows it on the Analytics page, and skips a key that has spent it
+  (`COARENA_DAILY_USD_LIMIT` changes the amount, for accounts with more budget). A model with no price of
+  its own is counted at the default model's rate and never holds a key back; the provider's own 429 does.
 - `GOOGLE_AI_STUDIO_API_KEY1`, `GOOGLE_AI_STUDIO_API_KEY2`, ... — keys from
   [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Same `1..50` convention. One key
   serves everything under **Google AI Studio** below. `GOOGLE_AI_STUDIO_MODEL` (optional) changes the

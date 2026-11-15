@@ -1077,6 +1077,15 @@ export default function DocumentsPage() {
               The last-minute numbers start again from zero when the server restarts; the daily
               ones don’t.
             </p>
+            <p>
+              A provider that gives each key a budget in dollars (Coarena: $5 a day per key, across
+              all its models) adds <code>usdToday</code>, the key’s spend today at each model’s
+              price, to every row of that key, and <code>usdPerDay</code> to its{" "}
+              <code>limits</code>. <code>usdApprox: true</code> means part of the spend was priced
+              at the provider’s rate because the model has no price of its own, so it is a guess.
+              A key that has spent its budget is skipped until midnight UTC, unless the spend is a
+              guess; the provider’s own refusal covers that case.
+            </p>
           </Section>
 
           <Section id="providers" title="Pause & resume">
@@ -1358,7 +1367,7 @@ export default function DocumentsPage() {
                 ["Cerebras", "Different for each model", "Very fast. The account needs billing set up, or it answers 402."],
                 ["Groq", "500,000 tokens a day per key and model (our own limit)", <>When a key reaches it, the next key is used until the UTC day ends; when every key has, requests get <code>429</code> until then. <code>gpt-oss</code> models send <code>thinking</code> events.</>],
                 ["Google AI Studio", "Per model, per project: 5–15 requests a minute and 20–500 a day on the free tier", <>Gemini 3 and 4 models; chat, tools and streaming work as with the others. A key that reaches a model&rsquo;s limit is skipped for that model only, until Google says it resets. See <a href="#google">Google AI Studio</a>.</>],
-                ["Coarena", "30 requests a minute per key", <>One endpoint for many models (Claude, Gemini, Grok, Kimi and more); pick one with <code>model</code>. Claude models decide for themselves whether to think before answering; when they do it is shown as <code>thinking</code> events and counted in <code>max_tokens</code>. Coarena&rsquo;s own limit is 8,192 tokens, so unless you send <code>max_tokens</code> the gateway asks for 16,384.</>],
+                ["Coarena", "30 requests a minute and $5 of usage a day per key", <>One endpoint for many models (Claude, Gemini, Grok, Kimi and more); pick one with <code>model</code>. Claude models decide for themselves whether to think before answering; when they do it is shown as <code>thinking</code> events and counted in <code>max_tokens</code>. Coarena&rsquo;s own limit is 8,192 tokens, so unless you send <code>max_tokens</code> the gateway asks for 16,384.</>],
               ]}
             />
           </Section>
