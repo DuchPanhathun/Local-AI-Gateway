@@ -84,3 +84,10 @@ console), `state/` (usage, pauses and the provider keys you add in the console),
   Windows are newer, and a log from there says what failed.
 - **Windows**: Ctrl+C in the terminal stops everything. The websites' Chrome window stays open on
   purpose, so you stay signed in.
+
+## License
+
+[MIT](LICENSE), © 2026 Duch Panhathun. The third-party software in this package keeps its own licenses, which
+are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The package is provided as is, with no warranty. It
+drives your own accounts with other companies' tools and websites; whether their terms allow that is for you
+to check.

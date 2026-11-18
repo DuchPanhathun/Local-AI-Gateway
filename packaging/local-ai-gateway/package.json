@@ -1,6 +1,6 @@
 {
   "name": "local-ai-gateway",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Run Local AI Gateway on your own computer: one console and API in front of your own Claude Code, Codex, Gemini CLI, Antigravity and ChatGPT/Grok/MiMo accounts.",
   "type": "module",
   "bin": {
@@ -21,7 +21,9 @@
     "bin",
     "app.tgz",
     "gateways",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "keywords": [
     "ai",
@@ -32,5 +34,5 @@
     "antigravity",
     "local"
   ],
-  "license": "UNLICENSED"
+  "license": "MIT"
 }

@@ -9,6 +9,9 @@
 // folder, so what ships has none of this server's settings, and a scan at the end
 // fails the build if any secret from a local .env file turns up in the package.
 //
+// The package is MIT (packaging/local-ai-gateway/LICENSE), and ships the licenses of the third-party code in it
+// (THIRD_PARTY_NOTICES.md, made here by third-party-notices.mjs).
+//
 // The package runs on Linux, macOS and Windows, so what ships must hold no compiled
 // code (the build fails if the console archive does), and the gateways get the changes
 // in packaging/patches applied to their copy (they are separate projects; see there).
@@ -16,6 +19,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeThirdPartyNotices } from "./third-party-notices.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const pkgDir = path.join(root, "packaging", "local-ai-gateway");
@@ -80,6 +84,9 @@ rmSync(path.join(standalone, "extension"), { recursive: true, force: true });
 for (const name of ["sharp", "@img"]) rmSync(path.join(standalone, "node_modules", name), { recursive: true, force: true });
 cpSync(path.join(root, "public"), path.join(standalone, "public"), { recursive: true });
 cpSync(path.join(root, ".next-local", "static"), path.join(standalone, ".next-local", "static"), { recursive: true });
+// The licenses of the third-party code in the console (its build copies the code without them).
+const notices = writeThirdPartyNotices({ root, standalone, out: path.join(pkgDir, "THIRD_PARTY_NOTICES.md") });
+console.log(`  third-party notices for ${notices.packages} packages${notices.fonts ? " and the Geist fonts" : ""}${notices.problems.length ? `; without a license file: ${notices.problems.join(", ")}` : ""}`);
 rmSync(path.join(pkgDir, "app.tgz"), { force: true });
 run("tar", ["-czf", path.join(pkgDir, "app.tgz"), "-C", standalone, "."]);
 

@@ -43,6 +43,7 @@ next-env.d.ts
 
 # the `npx local-ai-gateway` package: built by scripts/build-package.mjs
 /packaging/local-ai-gateway/app.tgz
+/packaging/local-ai-gateway/THIRD_PARTY_NOTICES.md
 /packaging/local-ai-gateway/gateways/
 /packaging/*.tgz
 
