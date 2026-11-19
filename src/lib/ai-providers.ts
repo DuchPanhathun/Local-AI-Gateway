@@ -9,6 +9,7 @@ import {
   interactions,
   isFinal,
   nativeUsage,
+  secondsUntilPacificMidnight,
   signatures,
   speechBody,
   transcriptFrom,
@@ -25,6 +26,9 @@ import {
   getKeyDaySpend,
   getKeyDayTokens,
   getKeyDayUsage,
+  getKeyQuotaDayUsage,
+  hasQuotaDay,
+  quotaDay,
   recordUsageEvent,
   todayUTC,
   type TokenUsage,
@@ -940,6 +944,11 @@ export type KeyUsageSnapshot = {
   tokensLast60s: number;
   requestsToday: number;
   tokensToday: number;
+  // A provider whose daily limits reset at another time than UTC midnight (Google: midnight Pacific): what the key
+  // used on that day, which is what its limits count, and when the day ends. `requestsToday` stays on the UTC day.
+  requestsQuotaDay?: number;
+  tokensQuotaDay?: number;
+  quotaResetsAt?: string;
   // A provider with a dollar budget per key: the key's spend today across all its models (the same on each of its
   // rows), and whether part of it is a guess.
   usdToday?: number;
@@ -957,12 +966,14 @@ export function getUsageSnapshot(): KeyUsageSnapshot[] {
   for (const providerId of PROVIDER_IDS) {
     const config = PROVIDERS[providerId];
     const today = getKeyDayUsage(providerId, day);
+    const ownDay = hasQuotaDay(providerId) ? getKeyQuotaDayUsage(providerId, quotaDay(providerId)) : null;
+    const ownDayEnds = ownDay ? new Date(Date.now() + secondsUntilPacificMidnight() * 1000).toISOString() : undefined;
 
     for (const { name } of collectKeys(config.keyEnvPrefix)) {
       const spend = config.dailyUsdLimitPerKey ? getKeyDaySpend(providerId, name, day) : undefined;
       // Every model this key was used with today or in the last minute,
       // defaulting to just the provider's default model when it hasn't been.
-      const modelsUsed = new Set<string>(today.get(name)?.keys() ?? []);
+      const modelsUsed = new Set<string>([...(today.get(name)?.keys() ?? []), ...(ownDay?.get(name)?.keys() ?? [])]);
       const prefix = `${providerId}:${name}:`;
       for (const mapKey of recent.keys()) {
         if (mapKey.startsWith(prefix)) modelsUsed.add(mapKey.slice(prefix.length));
@@ -974,6 +985,7 @@ export function getUsageSnapshot(): KeyUsageSnapshot[] {
           (e) => e.ts >= cutoff
         );
         const daily = today.get(name)?.get(model);
+        const ownDaily = ownDay?.get(name)?.get(model);
 
         snapshot.push({
           provider: providerId,
@@ -983,6 +995,9 @@ export function getUsageSnapshot(): KeyUsageSnapshot[] {
           tokensLast60s: lastMinute.reduce((sum, e) => sum + e.tokens, 0),
           requestsToday: daily?.requests ?? 0,
           tokensToday: daily?.tokens ?? 0,
+          ...(ownDay
+            ? { requestsQuotaDay: ownDaily?.requests ?? 0, tokensQuotaDay: ownDaily?.tokens ?? 0, quotaResetsAt: ownDayEnds }
+            : {}),
           ...(spend ? { usdToday: spend.usd, usdApprox: spend.approx } : {}),
           limits: limitsFor(providerId, model),
         });

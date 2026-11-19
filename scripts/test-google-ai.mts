@@ -71,6 +71,18 @@ describe("the day's reset", () => {
     assert.equal(g.secondsUntilPacificMidnight(Date.parse("2026-11-15T07:59:59Z")), 1 + 5, "a second before");
     assert.equal(g.secondsUntilPacificMidnight(Date.parse("2026-11-15T08:00:00Z")), 86_400 + 5, "at midnight: a whole day");
   });
+
+  it("is dated by the Pacific calendar, which a key's daily count follows", () => {
+    // 2026-11-19 02:45 UTC, when the question came up: still the 18th in California.
+    assert.equal(g.pacificDate(Date.parse("2026-11-19T02:45:00Z")), "2026-11-18");
+    assert.equal(g.pacificDate(Date.parse("2026-11-19T07:59:59Z")), "2026-11-18", "a second before midnight PST");
+    assert.equal(g.pacificDate(Date.parse("2026-11-19T08:00:00Z")), "2026-11-19", "midnight PST is 08:00 UTC");
+    assert.equal(g.pacificDate(Date.parse("2026-07-14T06:59:59Z")), "2026-07-13", "a second before midnight PDT");
+    assert.equal(g.pacificDate(Date.parse("2026-07-14T07:00:00Z")), "2026-07-14", "midnight PDT is 07:00 UTC");
+    assert.equal(g.pacificDate(Date.parse("2026-03-08T09:59:59Z")), "2026-03-08", "the night clocks go forward");
+    assert.equal(g.pacificDate(Date.parse("2026-12-31T20:00:00Z")), "2026-12-31", "no year slip");
+    assert.equal(g.pacificDate(Date.parse("2027-01-01T05:00:00Z")), "2026-12-31", "…at New Year");
+  });
 });
 
 describe("cooldowns", () => {

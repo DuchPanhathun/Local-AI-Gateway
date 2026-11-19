@@ -104,6 +104,18 @@ export type GoogleFailure = {
 
 const SIX_HOURS = 6 * 3600;
 
+// The date, as "2026-11-18", in Pacific time: the day Google counts a key's daily limits in.
+export function pacificDate(now = Date.now()): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(now));
+  const n = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${n("year")}-${n("month")}-${n("day")}`;
+}
+
 // Seconds until midnight in Pacific time, when Google resets the daily limits. Intl knows about daylight saving.
 export function secondsUntilPacificMidnight(now = Date.now()): number {
   const parts = new Intl.DateTimeFormat("en-US", {

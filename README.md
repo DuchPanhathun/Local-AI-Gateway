@@ -382,6 +382,14 @@ a second after each change and again on shutdown, so restarts and deploys keep i
 about 13 months are dropped. The Dashboard's daily and monthly numbers and Analytics' daily totals
 come from it; only the per-minute columns in Analytics are kept in memory.
 
+**Google keys count their own day.** Google resets a key's daily limits at midnight Pacific time
+(07:00 or 08:00 UTC, with daylight saving), not at UTC midnight, so the ledger also keeps each Google
+key's requests and tokens per Pacific day (the last 7 days, under `quotaDays` in `usage.json`). The
+Analytics page's "requests today" and "tokens today" bars for Google read that, with the time the
+day ends; everything else, including the Dashboard's totals, stays on UTC days. `GET /api/quotas`
+rows for Google carry `requestsQuotaDay`, `tokensQuotaDay` and `quotaResetsAt` beside the UTC
+`requestsToday`. It counts from the day this was added, so that first day's numbers are short.
+
 `GET /api/usage?month=2026-10` (owner-only; default: the current UTC month) returns one month:
 
 ```json

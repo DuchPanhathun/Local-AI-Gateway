@@ -52,6 +52,10 @@ type KeyUsage = {
   tokensLast60s: number;
   requestsToday: number;
   tokensToday: number;
+  // Google counts a key's daily limits from midnight Pacific, not UTC: what the key used on that day, and when it ends.
+  requestsQuotaDay?: number;
+  tokensQuotaDay?: number;
+  quotaResetsAt?: string;
   usdToday?: number; // the key's spend today across all its models (Coarena)
   usdApprox?: boolean;
   limits?: Limits;
@@ -2756,9 +2760,12 @@ export default function Dashboard() {
       )}
 
       {Object.entries(grouped).map(([provider, rows]) => {
+        // Google's day isn't the UTC one: its limits count from midnight Pacific.
+        const quotaResetsAt = rows.find((r) => r.quotaResetsAt)?.quotaResetsAt;
+        const dayRequests = (r: KeyUsage) => r.requestsQuotaDay ?? r.requestsToday;
         const visible = showIdleKeys
           ? rows
-          : rows.filter((r) => r.requestsToday > 0 || r.requestsLast60s > 0);
+          : rows.filter((r) => dayRequests(r) > 0 || r.requestsLast60s > 0);
         const keyCount = new Set(rows.map((r) => r.keyName)).size;
         // A provider that gives each key a dollar budget (Coarena) gets a column for it.
         const hasSpend = rows.some((r) => r.limits?.usdPerDay);
@@ -2772,6 +2779,16 @@ export default function Dashboard() {
                 {keyCount} key{keyCount === 1 ? "" : "s"}
               </span>
             </div>
+            {quotaResetsAt && (
+              <p className={styles.sectionDesc} style={{ marginTop: 8, marginBottom: 0 }}>
+                {PROVIDER_LABELS[provider as ChatProvider] ?? provider} counts each key&apos;s day from midnight
+                Pacific time, so the counts below are for that day. {generatedAt && (
+                  <> It ends {resetLabel(quotaResetsAt, Date.parse(generatedAt))}.</>
+                )}
+                {" "}
+                Counted since this was added, so today&apos;s are low until then.
+              </p>
+            )}
             <div className={styles.tableWrap} style={{ marginTop: 12 }}>
               <table className={styles.table}>
                 <thead>
@@ -2808,13 +2825,13 @@ export default function Dashboard() {
                       </td>
                       <td style={{ minWidth: 140 }}>
                         <ProgressBar
-                          used={r.requestsToday}
+                          used={dayRequests(r)}
                           limit={r.limits?.requestsPerDay}
                         />
                       </td>
                       <td style={{ minWidth: 140 }}>
                         <ProgressBar
-                          used={r.tokensToday}
+                          used={r.tokensQuotaDay ?? r.tokensToday}
                           limit={r.limits?.tokensPerDay}
                         />
                       </td>

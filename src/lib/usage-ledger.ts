@@ -1,5 +1,6 @@
 import { readFileSync, renameSync } from "node:fs";
 import { estimateTokens, recordKeyUsage } from "./api-tokens";
+import { pacificDate } from "./google-ai";
 import { statePath, writeJsonAtomic, writeJsonAtomicSync } from "./state-files";
 
 // Usage that outlives restarts: requests and tokens per UTC day, provider and
@@ -74,7 +75,23 @@ type ModelEntry = Counts & {
 type Ledger = {
   version: 1;
   days: Record<string, Record<string, Record<string, ModelEntry>>>;
+  // What each key has used on its provider's own day, for a provider whose daily limits don't reset at UTC midnight:
+  // quotaDays["2026-10-15"][provider][model][keyName]. Only the last few days are kept.
+  quotaDays?: Record<string, Record<string, Record<string, Record<string, { requests: number; tokens: number }>>>>;
 };
+
+// Providers that count a key's daily limits in another time zone than UTC: Google resets them at midnight Pacific.
+const PACIFIC_QUOTA_PROVIDERS = new Set(["google"]);
+const QUOTA_DAYS_KEPT = 7;
+
+export function hasQuotaDay(provider: string): boolean {
+  return PACIFIC_QUOTA_PROVIDERS.has(provider);
+}
+
+// The day a provider counts a key's daily limits in, as a date: Pacific for Google, UTC for everyone else.
+export function quotaDay(provider: string, now = Date.now()): string {
+  return hasQuotaDay(provider) ? pacificDate(now) : new Date(now).toISOString().slice(0, 10);
+}
 
 type Store = {
   ledger: Ledger;
@@ -110,6 +127,12 @@ function prune(ledger: Ledger): Ledger {
   for (const day of Object.keys(ledger.days)) {
     if (day < cutoff) delete ledger.days[day];
   }
+  if (ledger.quotaDays) {
+    const recent = new Date(Date.now() - QUOTA_DAYS_KEPT * 86_400_000).toISOString().slice(0, 10);
+    for (const day of Object.keys(ledger.quotaDays)) {
+      if (day < recent) delete ledger.quotaDays[day];
+    }
+  }
   return ledger;
 }
 
@@ -124,9 +147,9 @@ function load(): Ledger {
     return { version: 1, days: {} };
   }
   try {
-    const days = (JSON.parse(raw) as Partial<Ledger>).days;
+    const { days, quotaDays } = JSON.parse(raw) as Partial<Ledger>;
     if (!days || typeof days !== "object") throw new Error("it has no `days`");
-    return prune({ version: 1, days });
+    return prune({ version: 1, days, ...(quotaDays && typeof quotaDays === "object" ? { quotaDays } : {}) });
   } catch (err) {
     // Set the unreadable file aside rather than overwrite it on the next save.
     const aside = `${LEDGER_FILE}.unreadable-${Date.now()}`;
@@ -235,6 +258,12 @@ export function recordUsageEvent(provider: string, model: string, outcome: Usage
     if (typeof outcome.costUsd === "number" && Number.isFinite(outcome.costUsd) && outcome.costUsd > 0) {
       key.usd = Number(((key.usd ?? 0) + outcome.costUsd).toFixed(8));
       if (outcome.costExact === false) key.usdApprox = true;
+    }
+    if (hasQuotaDay(provider)) {
+      const byDay = ((s.ledger.quotaDays ??= {})[quotaDay(provider, now)] ??= {});
+      const k = (((byDay[provider] ??= {})[model] ??= {})[outcome.keyName] ??= { requests: 0, tokens: 0 });
+      k.requests += 1;
+      k.tokens += tokens?.total ?? 0;
     }
   }
 
@@ -348,6 +377,23 @@ export function getKeyDayUsage(
   const result = new Map<string, Map<string, { requests: number; tokens: number }>>();
   for (const [model, e] of Object.entries(store().ledger.days[day]?.[provider] ?? {})) {
     for (const [keyName, k] of Object.entries(e.keys ?? {})) {
+      let models = result.get(keyName);
+      if (!models) result.set(keyName, (models = new Map()));
+      models.set(model, { requests: k.requests ?? 0, tokens: k.tokens ?? 0 });
+    }
+  }
+  return result;
+}
+
+// Like getKeyDayUsage, on the provider's own day (`quotaDay`) instead of the UTC one: what Google counts a key's
+// daily limits over. Counted from when this was added, so the day it was added on is short.
+export function getKeyQuotaDayUsage(
+  provider: string,
+  day: string
+): Map<string, Map<string, { requests: number; tokens: number }>> {
+  const result = new Map<string, Map<string, { requests: number; tokens: number }>>();
+  for (const [model, keys] of Object.entries(store().ledger.quotaDays?.[day]?.[provider] ?? {})) {
+    for (const [keyName, k] of Object.entries(keys)) {
       let models = result.get(keyName);
       if (!models) result.set(keyName, (models = new Map()));
       models.set(model, { requests: k.requests ?? 0, tokens: k.tokens ?? 0 });
