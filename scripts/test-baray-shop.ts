@@ -5,10 +5,8 @@ import {
   changeTokenFile,
   ensureAccount,
   readTokenFile,
-  type Account,
 } from "../src/lib/api-tokens";
 import {
-  cancelOrder,
   finishOrder,
   ordersOf,
   paymentsStatus,
@@ -130,7 +128,8 @@ async function runBarayShopTests() {
     try {
       await finishOrder(testUser, deposit.orderId);
       assert.fail("Should have thrown");
-    } catch (err: any) {
+    } catch (error) {
+      const err = error as ShopError;
       console.log("  -> Caught err:", err?.constructor?.name, "status:", err?.status, "message:", err?.message);
       assert.strictEqual(err instanceof ShopError, true, "Must be ShopError");
       assert.strictEqual(err.status, 402, "Status must be 402");

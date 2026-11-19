@@ -1,7 +1,17 @@
 {
   "name": "local-ai-gateway",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Run Local AI Gateway on your own computer: one console and API in front of your own Claude Code, Codex, Gemini CLI, Antigravity and ChatGPT/Grok/MiMo accounts.",
+  "author": "Duch Panhathun",
+  "homepage": "https://github.com/DuchPanhathun/Local-AI-Gateway/tree/main/packaging/local-ai-gateway#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DuchPanhathun/Local-AI-Gateway.git",
+    "directory": "packaging/local-ai-gateway"
+  },
+  "bugs": {
+    "url": "https://github.com/DuchPanhathun/Local-AI-Gateway/issues"
+  },
   "type": "module",
   "bin": {
     "local-ai-gateway": "bin/cli.mjs"

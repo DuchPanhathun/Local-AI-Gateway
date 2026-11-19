@@ -22,6 +22,14 @@ test("the files npm packs include the license and the third-party notices", () =
   assert.ok(manifest.files.includes("THIRD_PARTY_NOTICES.md"), "the build makes it; without this line npm would leave it out");
 });
 
+test("package.json says who made it and where its source and issues are (package scanners score these)", () => {
+  assert.equal(manifest.author, "Duch Panhathun");
+  assert.equal(manifest.repository.url, "git+https://github.com/DuchPanhathun/Local-AI-Gateway.git");
+  assert.equal(manifest.repository.directory, "packaging/local-ai-gateway");
+  assert.equal(manifest.bugs.url, "https://github.com/DuchPanhathun/Local-AI-Gateway/issues");
+  assert.match(manifest.homepage, /^https:\/\/github\.com\/DuchPanhathun\/Local-AI-Gateway\//);
+});
+
 test("the README names the license it is published under", () => {
   assert.match(read("README.md"), /\[MIT\]\(LICENSE\)/);
 });

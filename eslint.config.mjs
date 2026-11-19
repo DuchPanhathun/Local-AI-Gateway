@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // What `npm run build:package` makes: the console's build for the npx package, and its copy of the gateways.
+    ".next-local/**",
+    "packaging/local-ai-gateway/gateways/**",
   ]),
 ]);
 

@@ -12,6 +12,10 @@ coding CLIs (Claude Code, Codex, Gemini, Antigravity) running on this machine vi
 [`local-agent-gateway`](../local-agent), a separate local-only service. Same `/api/chat` endpoint,
 same response shape, regardless of which kind of provider answered.
 
+**Open source ([MIT](LICENSE)), and contributions are welcome**: see [CONTRIBUTING.md](CONTRIBUTING.md). Just want to
+run it on your own computer? `npx local-ai-gateway` sets everything up
+([the package](https://www.npmjs.com/package/local-ai-gateway), source in [`packaging/`](packaging/local-ai-gateway)).
+
 Self-hosted on **thun-latitude-7280**, reachable only from your tailnet at
 `https://thun-latitude-7280.tail26930f.ts.net:8443` (`tailscale serve`, not Funnel — nothing here
 is on the public internet). Runs as the `ai-thun` systemd user service; see
@@ -627,3 +631,16 @@ in `.env`, then `systemctl --user restart thun-murex-door` and `deploy/vercel/de
 
 The route sets `maxDuration = 300`; that's a Vercel/serverless concept and has no effect self-hosted
 (`next start` has no per-request timeout), left as-is in case this ever moves back to Vercel.
+
+## Contributing
+
+Ideas, bug reports and pull requests are welcome. Share an idea in
+[Discussions](https://github.com/DuchPanhathun/Local-AI-Gateway/discussions), report a bug in
+[Issues](https://github.com/DuchPanhathun/Local-AI-Gateway/issues), and read [CONTRIBUTING.md](CONTRIBUTING.md) before
+a pull request: how to run it, what to check, and how changes are reviewed. A security problem goes to
+[SECURITY.md](SECURITY.md), not a public issue.
+
+## License
+
+[MIT](LICENSE), © 2026 Duch Panhathun. The npm package also ships the licenses of the third-party code in it
+(`THIRD_PARTY_NOTICES.md`, made by `npm run build:package`).

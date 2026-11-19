@@ -1,0 +1,9 @@
+# Who must review a change. With branch protection that requires code owner review, these paths cannot merge
+# without the maintainer. They touch hosting, the build or what ships to people's computers.
+*                          @DuchPanhathun
+/deploy/                   @DuchPanhathun
+/.github/                  @DuchPanhathun
+/scripts/                  @DuchPanhathun
+/packaging/                @DuchPanhathun
+/package.json              @DuchPanhathun
+/package-lock.json         @DuchPanhathun
